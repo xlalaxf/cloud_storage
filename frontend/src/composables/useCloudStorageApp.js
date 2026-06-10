@@ -34,6 +34,10 @@ export function useCloudStorageApp() {
     allowAvatarChange: true,
   })
   const settingsLoading = ref(false)
+  const storageCleanup = reactive({
+    running: false,
+    result: null,
+  })
   const foldersStack = ref([{ id: null, name: '全部文件' }])
   const searchText = ref('')
   const preview = reactive({ open: false, name: '', url: '', type: '', text: '' })
@@ -833,17 +837,25 @@ export function useCloudStorageApp() {
 
     let nextChunkIndex = 0
     const inflightLoaded = new Map()
-    async function worker() {
+    function claimNextChunkIndex() {
       while (nextChunkIndex < session.totalChunks) {
+        const chunkIndex = nextChunkIndex
+        nextChunkIndex += 1
+        if (!uploadedChunks.has(chunkIndex)) {
+          return chunkIndex
+        }
+      }
+      return null
+    }
+
+    async function worker() {
+      while (true) {
         await waitWhileUploadPaused()
         if (uploadControl.canceled) {
           throw new Error('上传已取消')
         }
-        const chunkIndex = nextChunkIndex
-        nextChunkIndex += 1
-        if (uploadedChunks.has(chunkIndex)) {
-          continue
-        }
+        const chunkIndex = claimNextChunkIndex()
+        if (chunkIndex === null) break
         const start = chunkIndex * session.chunkSize
         const end = Math.min(file.size, start + session.chunkSize)
         const chunk = file.slice(start, end)
@@ -1477,6 +1489,27 @@ export function useCloudStorageApp() {
       busy.value = false
     }
   }
+
+  async function cleanupExpiredStorage() {
+    if (!isAdmin.value || storageCleanup.running) return
+    const confirmed = await confirmAction({
+      title: '清理过期临时文件',
+      message: '将删除已过期上传任务的分片目录，以及超过 1 小时的上传合并临时文件。正式文件不会被删除。',
+      confirmText: '开始清理',
+      danger: false,
+    })
+    if (!confirmed) return
+    storageCleanup.running = true
+    try {
+      const result = await request('/admin/storage/cleanup-expired', { method: 'POST', timeoutMs: 0 })
+      storageCleanup.result = result
+      notify(`已释放 ${formatSize(result.releasedBytes || 0)}`, 'success')
+    } catch (error) {
+      fail(error)
+    } finally {
+      storageCleanup.running = false
+    }
+  }
   
   async function selectAdminUser(user, mode = activeTab.value) {
     admin.selectedUser = user
@@ -1797,6 +1830,7 @@ export function useCloudStorageApp() {
     systemSettings,
     settingsForm,
     settingsLoading,
+    storageCleanup,
     foldersStack,
     searchText,
     preview,
@@ -1913,6 +1947,7 @@ export function useCloudStorageApp() {
     loadAdminUsers,
     loadAdminSettings,
     saveSystemSettings,
+    cleanupExpiredStorage,
     selectAdminUser,
     loadSelectedAdminContext,
     loadAdminDetail,

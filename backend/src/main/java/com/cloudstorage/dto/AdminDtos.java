@@ -53,4 +53,14 @@ public final class AdminDtos {
             long loginAuditCount,
             long fileOperationAuditCount) {
     }
+
+    public record StorageCleanupResponse(
+            long expiredUploadSessions,
+            long expiredUploadChunks,
+            long expiredUploadBytes,
+            long deletedTemporaryFiles,
+            long deletedTemporaryBytes,
+            long failedTemporaryFiles,
+            long releasedBytes) {
+    }
 }

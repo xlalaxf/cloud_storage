@@ -1,6 +1,7 @@
 package com.cloudstorage.service;
 
 import com.cloudstorage.dto.FileDtos.FileResponse;
+import com.cloudstorage.dto.AdminDtos.StorageCleanupResponse;
 import com.cloudstorage.dto.UploadDtos.ChunkResponse;
 import com.cloudstorage.dto.UploadDtos.CompleteUploadRequest;
 import com.cloudstorage.dto.UploadDtos.InitUploadRequest;
@@ -20,6 +21,7 @@ import com.cloudstorage.repository.UserRepository;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.SequenceInputStream;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -202,10 +204,31 @@ public class ChunkedUploadService {
 
     @Transactional
     public void cleanupExpired() {
+        cleanupExpiredStorage();
+    }
+
+    @Transactional
+    public StorageCleanupResponse cleanupExpiredStorage() {
         List<UploadStatus> statuses = List.of(UploadStatus.UPLOADING, UploadStatus.FAILED, UploadStatus.CANCELED);
+        long expiredUploadSessions = 0;
+        long expiredUploadChunks = 0;
+        long expiredUploadBytes = 0;
         for (UploadSession session : sessionRepository.findByStatusInAndExpiresAtBefore(statuses, Instant.now())) {
-            cleanupChunks(session);
+            FileStorageService.DeletedDirectory deleted = cleanupChunksWithStats(session);
+            expiredUploadSessions++;
+            expiredUploadChunks += deleted.files();
+            expiredUploadBytes += deleted.bytes();
         }
+        FileStorageService.TemporaryCleanupResult temporary =
+                storageService.cleanupExpiredTemporaryObjects(Duration.ofHours(1));
+        return new StorageCleanupResponse(
+                expiredUploadSessions,
+                expiredUploadChunks,
+                expiredUploadBytes,
+                temporary.files(),
+                temporary.bytes(),
+                temporary.failures(),
+                expiredUploadBytes + temporary.bytes());
     }
 
     private UploadSession requireSession(User user, String uploadId) {
@@ -364,5 +387,11 @@ public class ChunkedUploadService {
         chunkRepository.deleteBySession(session);
         session.setUploadedBytes(0);
         storageService.deleteDirectory("tmp/uploads/" + session.getUploadId());
+    }
+
+    private FileStorageService.DeletedDirectory cleanupChunksWithStats(UploadSession session) {
+        chunkRepository.deleteBySession(session);
+        session.setUploadedBytes(0);
+        return storageService.deleteDirectoryWithStats("tmp/uploads/" + session.getUploadId());
     }
 }

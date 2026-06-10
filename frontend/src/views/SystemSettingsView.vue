@@ -1,14 +1,17 @@
 <script setup>
-import { RefreshCw, Save } from '@lucide/vue'
+import { RefreshCw, Save, Trash2 } from '@lucide/vue'
 import { useCloudStorageContext } from '../composables/appContext'
 
 const {
   busy,
+  cleanupExpiredStorage,
   formatDate,
+  formatSize,
   loadAdminSettings,
   saveSystemSettings,
   settingsForm,
   settingsLoading,
+  storageCleanup,
   systemSettings,
 } = useCloudStorageContext()
 </script>
@@ -88,6 +91,41 @@ const {
         </span>
       </div>
     </form>
+  </section>
+
+  <section class="admin-section settings-section">
+    <div class="admin-section-title">
+      <h3>存储维护</h3>
+    </div>
+
+    <div class="maintenance-panel">
+      <div>
+        <strong>清理过期临时文件</strong>
+        <span>删除过期上传分片，以及超过 1 小时的上传合并临时文件。正式文件不会被删除。</span>
+      </div>
+      <button class="text-button danger-text" :disabled="busy || storageCleanup.running" @click="cleanupExpiredStorage">
+        <Trash2 :size="16" />{{ storageCleanup.running ? '清理中' : '开始清理' }}
+      </button>
+    </div>
+
+    <div v-if="storageCleanup.result" class="cleanup-summary">
+      <div>
+        <strong>{{ formatSize(storageCleanup.result.releasedBytes || 0) }}</strong>
+        <span>释放空间</span>
+      </div>
+      <div>
+        <strong>{{ storageCleanup.result.expiredUploadSessions || 0 }}</strong>
+        <span>过期上传任务</span>
+      </div>
+      <div>
+        <strong>{{ storageCleanup.result.deletedTemporaryFiles || 0 }}</strong>
+        <span>临时文件</span>
+      </div>
+      <div>
+        <strong>{{ storageCleanup.result.failedTemporaryFiles || 0 }}</strong>
+        <span>失败文件</span>
+      </div>
+    </div>
   </section>
 </section>
 </template>

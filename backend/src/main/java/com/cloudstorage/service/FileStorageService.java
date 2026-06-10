@@ -8,9 +8,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.FileTime;
 import java.security.DigestInputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Comparator;
 import java.util.Locale;
 import java.util.stream.Stream;
@@ -139,6 +142,35 @@ public class FileStorageService {
         }
     }
 
+    public DeletedDirectory deleteDirectoryWithStats(String relativePath) {
+        if (relativePath == null || relativePath.isBlank()) {
+            return new DeletedDirectory(0, 0);
+        }
+        try {
+            Path target = safeResolve(Paths.get(relativePath));
+            if (!Files.exists(target)) {
+                return new DeletedDirectory(0, 0);
+            }
+            DeleteCounter counter = new DeleteCounter();
+            try (Stream<Path> paths = Files.walk(target)) {
+                paths.sorted(Comparator.reverseOrder()).forEach(path -> {
+                    try {
+                        if (Files.isRegularFile(path)) {
+                            counter.files++;
+                            counter.bytes += Files.size(path);
+                        }
+                        Files.deleteIfExists(path);
+                    } catch (IOException ex) {
+                        throw new IllegalStateException(ex);
+                    }
+                });
+            }
+            return new DeletedDirectory(counter.files, counter.bytes);
+        } catch (IllegalStateException | IOException ex) {
+            throw AppException.badRequest("临时文件清理失败");
+        }
+    }
+
     public void deleteDirectory(String relativePath) {
         if (relativePath == null || relativePath.isBlank()) {
             return;
@@ -159,6 +191,44 @@ public class FileStorageService {
             }
         } catch (IllegalStateException | IOException ex) {
             throw AppException.badRequest("临时文件清理失败");
+        }
+    }
+
+    public TemporaryCleanupResult cleanupExpiredTemporaryObjects(Duration minAge) {
+        Path tempRoot = root.resolve("tmp").normalize();
+        if (!tempRoot.startsWith(root) || !Files.exists(tempRoot)) {
+            return new TemporaryCleanupResult(0, 0, 0);
+        }
+        Instant cutoff = Instant.now().minus(minAge == null ? Duration.ofHours(1) : minAge);
+        DeleteCounter counter = new DeleteCounter();
+        try (Stream<Path> paths = Files.list(tempRoot)) {
+            paths.filter(Files::isRegularFile)
+                    .filter(this::isManagedTemporaryFile)
+                    .forEach(path -> deleteIfOlderThan(path, cutoff, counter));
+            return new TemporaryCleanupResult(counter.files, counter.bytes, counter.failures);
+        } catch (IOException ex) {
+            throw AppException.badRequest("临时文件清理失败");
+        }
+    }
+
+    private boolean isManagedTemporaryFile(Path path) {
+        String name = path.getFileName().toString();
+        return name.startsWith("upload-") && name.endsWith(".tmp");
+    }
+
+    private void deleteIfOlderThan(Path path, Instant cutoff, DeleteCounter counter) {
+        try {
+            FileTime modifiedAt = Files.getLastModifiedTime(path);
+            if (modifiedAt.toInstant().isAfter(cutoff)) {
+                return;
+            }
+            long size = Files.size(path);
+            if (Files.deleteIfExists(path)) {
+                counter.files++;
+                counter.bytes += size;
+            }
+        } catch (IOException ex) {
+            counter.failures++;
         }
     }
 
@@ -228,6 +298,12 @@ public class FileStorageService {
         return builder.toString();
     }
 
+    private static final class DeleteCounter {
+        private long files;
+        private long bytes;
+        private long failures;
+    }
+
     public record StoredObject(
             String storedName,
             String relativePath,
@@ -239,5 +315,11 @@ public class FileStorageService {
     }
 
     public record StoredChunk(String relativePath, long size, String sha256) {
+    }
+
+    public record DeletedDirectory(long files, long bytes) {
+    }
+
+    public record TemporaryCleanupResult(long files, long bytes, long failures) {
     }
 }

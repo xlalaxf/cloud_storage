@@ -372,3 +372,69 @@
   color: #6b7888;
   font-size: 12px;
 }
+
+.maintenance-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px;
+  border: 1px solid #d9e1ea;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.maintenance-panel div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.maintenance-panel strong {
+  color: #1d2433;
+  font-size: 14px;
+}
+
+.maintenance-panel span {
+  color: #6b7888;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.maintenance-panel .text-button {
+  flex: 0 0 auto;
+}
+
+.cleanup-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.cleanup-summary div {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid #e1e8ef;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.cleanup-summary strong,
+.cleanup-summary span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cleanup-summary strong {
+  color: #1d2433;
+  font-size: 14px;
+}
+
+.cleanup-summary span {
+  margin-top: 4px;
+  color: #6b7888;
+  font-size: 12px;
+}

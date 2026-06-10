@@ -5,6 +5,7 @@ import com.cloudstorage.dto.AdminDtos.AuditClearResponse;
 import com.cloudstorage.dto.AdminDtos.BanUserRequest;
 import com.cloudstorage.dto.AdminDtos.FileOperationAuditResponse;
 import com.cloudstorage.dto.AdminDtos.LoginAuditResponse;
+import com.cloudstorage.dto.AdminDtos.StorageCleanupResponse;
 import com.cloudstorage.dto.ApiResponse;
 import com.cloudstorage.dto.FileDtos.FileResponse;
 import com.cloudstorage.dto.SystemSettingsDtos.AdminSettingsResponse;
@@ -12,6 +13,7 @@ import com.cloudstorage.dto.SystemSettingsDtos.UpdateSystemSettingsRequest;
 import com.cloudstorage.model.User;
 import com.cloudstorage.service.AdminUserService;
 import com.cloudstorage.service.AuditService;
+import com.cloudstorage.service.ChunkedUploadService;
 import com.cloudstorage.service.FileService;
 import com.cloudstorage.service.SystemSettingsService;
 import jakarta.validation.Valid;
@@ -35,16 +37,19 @@ public class AdminController {
     private final AuditService auditService;
     private final FileService fileService;
     private final SystemSettingsService systemSettingsService;
+    private final ChunkedUploadService uploadService;
 
     public AdminController(
             AdminUserService adminUserService,
             AuditService auditService,
             FileService fileService,
-            SystemSettingsService systemSettingsService) {
+            SystemSettingsService systemSettingsService,
+            ChunkedUploadService uploadService) {
         this.adminUserService = adminUserService;
         this.auditService = auditService;
         this.fileService = fileService;
         this.systemSettingsService = systemSettingsService;
+        this.uploadService = uploadService;
     }
 
     @GetMapping("/settings")
@@ -108,6 +113,11 @@ public class AdminController {
             @PathVariable Long userId,
             @RequestParam(required = false) Long parentId) {
         return ApiResponse.ok(fileService.listForAdmin(userId, parentId));
+    }
+
+    @PostMapping("/storage/cleanup-expired")
+    public ApiResponse<StorageCleanupResponse> cleanupExpiredStorage() {
+        return ApiResponse.ok("过期临时文件已清理", uploadService.cleanupExpiredStorage());
     }
 
     @DeleteMapping("/files/{fileId}")
