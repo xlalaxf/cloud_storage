@@ -90,6 +90,7 @@ export function useCloudStorageApp() {
   const MEDIA_AUDIO_EXTENSIONS = new Set(['mp3', 'wav', 'flac', 'aac', 'm4a', 'ogg', 'opus', 'wma'])
   const MEDIA_VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'mkv', 'avi', 'm4v', 'wmv'])
   const CHUNK_UPLOAD_SIZE = 32 * 1024 * 1024
+  const SIMPLE_UPLOAD_MAX_SIZE = CHUNK_UPLOAD_SIZE
   const CHUNK_UPLOAD_CONCURRENCY = 3
   const CHUNK_UPLOAD_RETRIES = 3
   const CHUNK_UPLOAD_CACHE_PREFIX = 'cloud_storage_chunk_upload:'
@@ -782,7 +783,9 @@ export function useCloudStorageApp() {
       for (let index = 0; index < list.length; index += 1) {
         const file = list[index]
         uploadProgress.label = list.length > 1 ? `正在上传 ${index + 1}/${list.length}：${file.name}` : `正在上传 ${file.name}`
-        const uploadedFile = await uploadFileInChunks(file, completedBeforeCurrent, totalBytes, startedAt)
+        const uploadedFile = file.size <= SIMPLE_UPLOAD_MAX_SIZE
+          ? await uploadFileDirect(file, completedBeforeCurrent, totalBytes, startedAt)
+          : await uploadFileInChunks(file, completedBeforeCurrent, totalBytes, startedAt)
         uploaded.push(uploadedFile)
         completedBeforeCurrent += file.size
         updateUploadProgress(completedBeforeCurrent, totalBytes, startedAt)
@@ -820,6 +823,24 @@ export function useCloudStorageApp() {
         uploadProgress.cancellable = false
       }, uploadControl.canceled ? 0 : 900)
     }
+  }
+
+  async function uploadFileDirect(file, baseLoaded, totalBytes, startedAt) {
+    uploadProgress.totalChunks = 0
+    uploadProgress.uploadedChunks = 0
+    const form = new FormData()
+    form.append('files', file)
+    if (currentParentId.value) {
+      form.append('parentId', String(currentParentId.value))
+    }
+    const uploadedFiles = await uploadRequest('/files/upload', form, {
+      timeoutMs: 0,
+      onProgress: ({ loaded }) => {
+        updateUploadProgress(baseLoaded + Math.min(file.size, loaded), totalBytes, startedAt)
+      },
+    })
+    updateUploadProgress(baseLoaded + file.size, totalBytes, startedAt)
+    return uploadedFiles[0]
   }
 
   async function uploadFileInChunks(file, baseLoaded, totalBytes, startedAt) {
