@@ -1,0 +1,87 @@
+.page-ready-enter-active,
+.page-ready-leave-active {
+  transition:
+    opacity 220ms ease,
+    transform 220ms ease;
+}
+
+.page-ready-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+.page-ready-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+@keyframes boot-progress {
+  0% {
+    transform: translateX(-120%);
+  }
+
+  55% {
+    transform: translateX(85%);
+  }
+
+  100% {
+    transform: translateX(260%);
+  }
+}
+
+.panel-switch-enter-active,
+.panel-switch-leave-active {
+  transition:
+    opacity 160ms ease,
+    transform 160ms ease;
+}
+
+.panel-switch-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+.panel-switch-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+.modal-fade-enter-active,
+.modal-fade-leave-active {
+  transition: opacity 180ms ease;
+}
+
+.modal-fade-enter-active .modal,
+.modal-fade-enter-active .preview-modal,
+.modal-fade-leave-active .modal,
+.modal-fade-leave-active .preview-modal {
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease;
+}
+
+.modal-fade-enter-from,
+.modal-fade-leave-to {
+  opacity: 0;
+}
+
+.modal-fade-enter-from .modal,
+.modal-fade-enter-from .preview-modal,
+.modal-fade-leave-to .modal,
+.modal-fade-leave-to .preview-modal {
+  opacity: 0;
+  transform: translateY(10px) scale(0.98);
+}
+
+.toast-pop-enter-active,
+.toast-pop-leave-active {
+  transition:
+    opacity 180ms ease,
+    transform 180ms ease;
+}
+
+.toast-pop-enter-from,
+.toast-pop-leave-to {
+  opacity: 0;
+  transform: translate(-50%, calc(-50% + 8px)) scale(0.98);
+}

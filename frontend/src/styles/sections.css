@@ -1,0 +1,264 @@
+.links-layout,
+.admin-layout {
+  display: grid;
+  gap: 16px;
+}
+
+.workspace > section {
+  width: 100%;
+  min-height: 0;
+}
+
+.workspace > .admin-layout,
+.workspace > .content-grid,
+.workspace > .links-layout {
+  flex: 1;
+}
+
+.links-layout {
+  grid-template-columns: 1fr 1fr;
+}
+
+.admin-layout {
+  grid-template-columns: minmax(240px, 340px) minmax(0, 1fr);
+  align-items: stretch;
+  min-height: 0;
+}
+
+.link-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid #d9e1ea;
+  border-radius: 8px;
+  margin-top: 10px;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease,
+    transform 150ms ease;
+}
+
+.link-card:hover {
+  border-color: #cfd8e3;
+  box-shadow: 0 8px 20px rgba(29, 36, 51, 0.08);
+  transform: translateY(-1px);
+}
+
+.link-info {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.link-info strong,
+.link-info span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.link-info strong {
+  font-size: 14px;
+  color: #263241;
+}
+
+.link-info small {
+  color: #6b7888;
+}
+
+.profile-panel {
+  display: grid;
+  grid-template-columns: minmax(240px, 340px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.profile-card {
+  min-width: 0;
+  padding: 16px;
+}
+
+.profile-summary {
+  display: grid;
+  gap: 14px;
+}
+
+.avatar-block {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+}
+
+.profile-avatar {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  overflow: hidden;
+  border-radius: 8px;
+  color: #ffffff;
+  background: #2c9a83;
+  font-weight: 800;
+}
+
+.profile-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.avatar-upload {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  color: #287c6b;
+  background: #edf7f4;
+}
+
+.avatar-upload.secondary {
+  color: #526173;
+  background: #edf1f5;
+}
+
+.avatar-upload:hover:not(:disabled) {
+  color: #ffffff;
+  background: #287c6b;
+  transform: translateY(-1px);
+}
+
+.avatar-upload.secondary:hover:not(:disabled) {
+  color: #1d2433;
+  background: #dfe7ef;
+}
+
+.avatar-upload:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.avatar-upload.locked:disabled {
+  cursor: not-allowed;
+}
+
+.avatar-block small {
+  color: #6b7888;
+  font-size: 12px;
+}
+
+.profile-summary h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.profile-summary p {
+  margin: 4px 0 0;
+  color: #6b7888;
+}
+
+.profile-summary dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.profile-summary dl div {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.profile-summary dt {
+  color: #6b7888;
+  font-size: 13px;
+}
+
+.profile-summary dd {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-form {
+  display: grid;
+  gap: 12px;
+}
+
+.profile-form label {
+  display: grid;
+  gap: 6px;
+}
+
+.profile-form label > span {
+  color: #526173;
+  font-size: 13px;
+}
+
+.profile-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+
+.profile-actions .primary {
+  min-width: 120px;
+}
+
+.users-panel {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  padding: 10px;
+  min-width: 0;
+}
+
+.users-panel button {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 8px;
+  color: #263241;
+  background: transparent;
+}
+
+.users-panel strong,
+.users-panel small {
+  display: block;
+  text-align: left;
+}
+
+.users-panel small {
+  color: #6b7888;
+  font-size: 12px;
+}
+
+.users-panel em {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: #287c6b;
+  background: #edf7f4;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.users-panel em.banned {
+  color: #b42318;
+  background: #fff0ed;
+}
+
+.users-panel .active,
+.users-panel button:hover {
+  background: #edf1f5;
+}

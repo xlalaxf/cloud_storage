@@ -1,0 +1,374 @@
+.admin-user-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid #d9e1ea;
+  border-radius: 8px;
+  color: #526173;
+  background: #f8fafc;
+}
+
+.admin-user-status strong {
+  color: #1d2433;
+}
+
+.admin-user-status.banned {
+  border-color: #ffd1c7;
+  color: #b42318;
+  background: #fff7f5;
+}
+
+.admin-detail {
+  display: grid;
+  gap: 16px;
+  min-height: 0;
+}
+
+.admin-layout:not(.admin-files-page) .admin-detail {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.admin-files-page .admin-detail {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.admin-section {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid #d9e1ea;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.admin-layout:not(.admin-files-page) .admin-detail .admin-section:last-child,
+.admin-files-page .admin-section {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.admin-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.admin-section-title h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.audit-range {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.audit-range input {
+  width: 150px;
+  padding: 7px 9px;
+  font-size: 13px;
+}
+
+.audit-range span {
+  color: #6b7888;
+  font-size: 13px;
+}
+
+.text-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 8px;
+  color: #526173;
+  background: #edf1f5;
+}
+
+.danger-text {
+  color: #b42318;
+  background: #fff0ed;
+}
+
+.danger-text:not(:disabled):hover {
+  color: #ffffff;
+  background: #b42318;
+}
+
+.text-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.admin-section-title span,
+.audit-panel header span {
+  color: #6b7888;
+  font-size: 12px;
+}
+
+.admin-file-list {
+  align-content: start;
+  max-height: min(420px, 52vh);
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.admin-folder-crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: -2px 0 12px;
+}
+
+.admin-folder-crumbs button {
+  max-width: 180px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  color: #526173;
+  background: #edf1f5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-folder-crumbs button:hover {
+  color: #287c6b;
+  background: #e5f3ef;
+}
+
+.audit-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  min-height: 0;
+}
+
+.admin-layout:not(.admin-files-page) .audit-grid {
+  flex: 1;
+  overflow: hidden;
+}
+
+.audit-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid #d9e1ea;
+  border-radius: 8px;
+  background: #ffffff;
+  overflow: hidden;
+}
+
+.audit-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #e7edf3;
+  background: #f8fafc;
+}
+
+.audit-panel h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.audit-list {
+  min-height: 0;
+  max-height: min(360px, 44vh);
+  overflow: auto;
+}
+
+.admin-layout:not(.admin-files-page) .audit-list {
+  flex: 1;
+  max-height: 100%;
+}
+
+.audit-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #edf1f5;
+  transition:
+    background 150ms ease,
+    transform 150ms ease;
+}
+
+.audit-row:last-child {
+  border-bottom: 0;
+}
+
+.audit-row:hover {
+  background: #f8fafc;
+  transform: translateY(-1px);
+}
+
+.audit-row strong,
+.audit-file {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audit-row small,
+.audit-row p {
+  color: #6b7888;
+}
+
+.audit-row small {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+}
+
+.audit-row p {
+  grid-column: 1 / -1;
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.audit-status,
+.audit-file {
+  align-self: start;
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: #287c6b;
+  background: #edf7f4;
+  font-size: 12px;
+}
+
+.audit-status.failed {
+  color: #b42318;
+  background: #fff0ed;
+}
+
+.audit-file {
+  max-width: 140px;
+  color: #526173;
+  background: #eef3f7;
+}
+
+.empty-audit {
+  padding: 18px 12px;
+  color: #6b7888;
+  text-align: center;
+}
+
+.compact .file-row,
+.admin-layout .file-row {
+  grid-template-columns: 24px minmax(180px, 1fr) 120px 90px 48px;
+}
+
+.share-shell .compact .file-row {
+  grid-template-columns: 24px minmax(180px, 1fr) 120px 90px 48px;
+}
+
+.admin-files-page .admin-file-list {
+  flex: 1;
+  max-height: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.admin-layout .file-row:hover {
+  transform: none;
+}
+
+.settings-page {
+  display: grid;
+  gap: 16px;
+  max-width: 820px;
+}
+
+.settings-section {
+  min-height: 0;
+}
+
+.settings-form {
+  max-width: 680px;
+}
+
+.settings-form .profile-actions {
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.setting-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #d9e1ea;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.setting-toggle input {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  accent-color: #287c6b;
+}
+
+.setting-toggle span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.setting-toggle strong {
+  color: #1d2433;
+  font-size: 14px;
+}
+
+.setting-toggle small,
+.settings-updated {
+  color: #6b7888;
+  font-size: 12px;
+}
+
+.settings-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.settings-summary div {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #e1e8ef;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.settings-summary strong,
+.settings-summary span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-summary strong {
+  color: #1d2433;
+  font-size: 14px;
+}
+
+.settings-summary span {
+  margin-top: 4px;
+  color: #6b7888;
+  font-size: 12px;
+}

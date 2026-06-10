@@ -1,0 +1,52 @@
+.share-top {
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.share-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.share-download {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 38px;
+  border-radius: 8px;
+  white-space: nowrap;
+  background: #287c6b;
+  color: #fff;
+}
+
+.share-download:hover {
+  background: #216757;
+}
+
+.metric {
+  display: grid;
+  place-items: center;
+  min-width: 80px;
+  padding: 10px;
+  border: 1px solid #d9e1ea;
+  border-radius: 8px;
+}
+
+.metric span {
+  font-size: 22px;
+  font-weight: 800;
+}
+
+.metric small,
+.notice {
+  color: #6b7888;
+}
+
+.code-box {
+  display: grid;
+  grid-template-columns: 1fr 92px;
+  gap: 10px;
+}

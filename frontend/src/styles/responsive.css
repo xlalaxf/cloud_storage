@@ -1,0 +1,137 @@
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+
+  .file-row:hover,
+  .icon-button:hover,
+  .primary:not(:disabled):hover,
+  .tool:not(:disabled):hover,
+  .code-box button:hover,
+  .sidebar nav button:hover,
+  .logout:hover,
+  .users-panel button:hover,
+  .breadcrumbs button:hover,
+  .text-action:hover,
+  .action-grid button:hover,
+  .link-card:hover,
+  .drop-zone.active {
+    transform: none;
+  }
+
+  .audit-row:hover {
+    transform: none;
+  }
+
+  .boot-bar::after {
+    animation: none;
+    transform: none;
+    width: 100%;
+  }
+}
+
+@media (max-width: 960px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    flex-direction: row;
+    align-items: center;
+    overflow-x: auto;
+  }
+
+  .sidebar nav {
+    grid-auto-flow: column;
+    grid-auto-columns: max-content;
+  }
+
+  .logout {
+    margin-top: 0;
+    width: auto;
+  }
+
+  .content-grid,
+  .links-layout,
+  .profile-panel,
+  .admin-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .audit-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-section-title {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .audit-range {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .topbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .search-box {
+    width: 100%;
+  }
+}
+
+@media (max-width: 680px) {
+  .workspace {
+    padding: 14px;
+  }
+
+  .auth-panel,
+  .share-shell {
+    padding: 20px;
+  }
+
+  .brand span {
+    display: none;
+  }
+
+  .file-head {
+    display: none;
+  }
+
+  .file-row,
+  .compact .file-row,
+  .admin-layout .file-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-auto-rows: minmax(24px, auto);
+    gap: 4px 10px;
+    padding: 10px;
+  }
+
+  .name-cell {
+    grid-column: 1 / -1;
+  }
+
+  .action-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .captcha-row,
+  .code-box,
+  .settings-summary {
+    grid-template-columns: 1fr;
+  }
+}
