@@ -18,12 +18,13 @@ import org.hibernate.annotations.UpdateTimestamp;
 @Table(name = "system_settings")
 public class SystemSettings {
     public static final Long SINGLETON_ID = 1L;
+    public static final String DEFAULT_SITE_NAME = "Cloud Storage";
 
     @Id
     private Long id = SINGLETON_ID;
 
     @Column(nullable = false, length = 80)
-    private String siteName = "Cloud Storage";
+    private String siteName = DEFAULT_SITE_NAME;
 
     @Column(nullable = false)
     private boolean allowUserLogin = true;
