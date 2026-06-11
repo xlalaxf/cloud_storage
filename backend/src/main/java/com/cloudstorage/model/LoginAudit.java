@@ -48,6 +48,6 @@ public class LoginAudit {
     private String message;
 
     @CreationTimestamp
-    @Column(nullable = false, updatable = false)
+    @Column(nullable = false, updatable = false, columnDefinition = "datetime")
     private Instant createdAt;
 }

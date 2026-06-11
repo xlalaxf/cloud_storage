@@ -75,14 +75,14 @@ public class UploadSession {
     @Column(length = 64)
     private String fileSha256;
 
-    @Column(nullable = false)
+    @Column(nullable = false, columnDefinition = "datetime")
     private Instant expiresAt;
 
     @CreationTimestamp
-    @Column(nullable = false, updatable = false)
+    @Column(nullable = false, updatable = false, columnDefinition = "datetime")
     private Instant createdAt;
 
     @UpdateTimestamp
-    @Column(nullable = false)
+    @Column(nullable = false, columnDefinition = "datetime")
     private Instant updatedAt;
 }

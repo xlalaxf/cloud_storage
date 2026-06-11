@@ -43,12 +43,13 @@ public class ShareLink {
     @Column(nullable = false)
     private boolean enabled = true;
 
+    @Column(columnDefinition = "datetime")
     private Instant expiresAt;
 
     @Column(nullable = false)
     private long downloadCount = 0;
 
     @CreationTimestamp
-    @Column(nullable = false, updatable = false)
+    @Column(nullable = false, updatable = false, columnDefinition = "datetime")
     private Instant createdAt;
 }

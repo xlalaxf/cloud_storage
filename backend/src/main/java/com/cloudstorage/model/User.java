@@ -54,11 +54,13 @@ public class User {
     @Column(nullable = false)
     private boolean deleted = false;
 
+    @Column(columnDefinition = "datetime")
     private Instant deletedAt;
 
     @Column(length = 300)
     private String banReason;
 
+    @Column(columnDefinition = "datetime")
     private Instant bannedUntil;
 
     @Lob
@@ -69,11 +71,11 @@ public class User {
     private String avatarContentType;
 
     @CreationTimestamp
-    @Column(nullable = false, updatable = false)
+    @Column(nullable = false, updatable = false, columnDefinition = "datetime")
     private Instant createdAt;
 
     @UpdateTimestamp
-    @Column(nullable = false)
+    @Column(nullable = false, columnDefinition = "datetime")
     private Instant updatedAt;
 
     public boolean isBanned() {

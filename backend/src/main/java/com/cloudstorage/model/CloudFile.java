@@ -75,10 +75,10 @@ public class CloudFile {
     private boolean deleted = false;
 
     @CreationTimestamp
-    @Column(nullable = false, updatable = false)
+    @Column(nullable = false, updatable = false, columnDefinition = "datetime")
     private Instant createdAt;
 
     @UpdateTimestamp
-    @Column(nullable = false)
+    @Column(nullable = false, columnDefinition = "datetime")
     private Instant updatedAt;
 }
