@@ -81,4 +81,20 @@ public final class FileDtos {
             List<FileResponse> files,
             long downloadCount) {
     }
+
+    public record ExtractJobResponse(
+            String jobId,
+            Long fileId,
+            String fileName,
+            String status,
+            int percent,
+            int processedEntries,
+            int totalEntries,
+            long processedBytes,
+            long totalBytes,
+            String message,
+            FileResponse root,
+            Instant startedAt,
+            Instant completedAt) {
+    }
 }

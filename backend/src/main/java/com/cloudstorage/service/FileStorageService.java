@@ -258,6 +258,14 @@ public class FileStorageService {
         }
     }
 
+    public Path objectPath(String relativePath) {
+        try {
+            return safeResolve(Paths.get(relativePath));
+        } catch (IOException ex) {
+            throw AppException.notFound("文件不存在");
+        }
+    }
+
     public Path createTempFile(String prefix, String suffix) {
         try {
             Path tempRoot = root.resolve("tmp");

@@ -30,6 +30,7 @@ const {
   downloadFile,
   downloadSelectedFiles,
   dragActive,
+  extractProgress,
   extractSelected,
   fileInput,
   foldersStack,
@@ -98,6 +99,21 @@ const {
       </div>
       <div class="upload-bar" aria-hidden="true">
         <span :style="{ width: `${uploadProgress.percent}%` }"></span>
+      </div>
+    </div>
+
+    <div v-if="extractProgress.active" class="upload-progress extract-progress" role="status" aria-live="polite">
+      <div class="upload-progress-top">
+        <strong>{{ extractProgress.label }}</strong>
+        <span>{{ extractProgress.percent }}%</span>
+      </div>
+      <div class="upload-progress-meta">
+        <span>{{ extractProgress.message }}</span>
+        <span v-if="extractProgress.totalEntries">{{ extractProgress.processedEntries }} / {{ extractProgress.totalEntries }} 项</span>
+        <span v-if="extractProgress.totalBytes">{{ formatSize(extractProgress.processedBytes) }} / {{ formatSize(extractProgress.totalBytes) }}</span>
+      </div>
+      <div class="upload-bar" aria-hidden="true">
+        <span :style="{ width: `${extractProgress.percent}%` }"></span>
       </div>
     </div>
 
@@ -170,7 +186,7 @@ const {
         <button @click="openMoveDialog('copy')"><Copy :size="17" />复制</button>
         <button v-if="selected.fileKind === 'FILE'" @click="createDirectLink"><ExternalLink :size="17" />直链</button>
         <button @click="openShareDialog"><Share2 :size="17" />分享</button>
-        <button v-if="isZipFile(selected)" @click="extractSelected"><Archive :size="17" />解压</button>
+        <button v-if="isZipFile(selected)" :disabled="extractProgress.active" @click="extractSelected"><Archive :size="17" />解压</button>
         <button class="danger" @click="deleteSelected"><Trash2 :size="17" />删除</button>
       </div>
     </template>

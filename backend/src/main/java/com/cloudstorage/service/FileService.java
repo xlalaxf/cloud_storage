@@ -17,16 +17,21 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.URLConnection;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Enumeration;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
+import java.util.zip.ZipException;
+import java.util.zip.ZipFile;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 import org.springframework.core.io.InputStreamResource;
@@ -268,31 +273,54 @@ public class FileService {
 
     @Transactional
     public List<FileResponse> extractZip(User user, Long fileId) {
+        return extractZip(user.getId(), fileId, null);
+    }
+
+    @Transactional(readOnly = true)
+    public void validateExtractable(User user, Long fileId) {
         CloudFile archive = requireOwned(user, fileId);
         if (archive.getFileKind() != FileKind.FILE || !isZip(archive)) {
             throw AppException.badRequest("当前仅支持 ZIP 文件在线解压");
         }
+    }
+
+    @Transactional
+    public void extractZipJob(ExtractJobService.ExtractJob job) {
+        List<FileResponse> extracted = extractZip(job.userId(), job.fileId(), job);
+        if (!extracted.isEmpty()) {
+            job.complete(extracted.get(0));
+        }
+    }
+
+    private List<FileResponse> extractZip(Long userId, Long fileId, ExtractJobService.ExtractJob job) {
+        User user = userRepository.findById(userId).orElseThrow(() -> AppException.notFound("用户不存在"));
+        CloudFile archive = requireOwned(user, fileId);
+        if (archive.getFileKind() != FileKind.FILE || !isZip(archive)) {
+            throw AppException.badRequest("当前仅支持 ZIP 文件在线解压");
+        }
+        if (job != null) {
+            job.scanning(archive.getName());
+        }
+        Path archivePath = storageService.objectPath(requireObject(archive).getRelativePath());
+        List<ZipEntry> entries = readZipEntries(archivePath);
+        ZipStats stats = scanZipEntries(entries);
+        if (job != null) {
+            job.extracting(stats.totalEntries(), stats.totalBytes());
+        }
         CloudFile extractRoot = createExtractRoot(user, archive);
         List<FileResponse> extracted = new ArrayList<>();
         List<FileStorageService.StoredObject> storedObjects = new ArrayList<>();
-        try (InputStream inputStream = storageService.resource(archive.getRelativePath()).getInputStream();
-                ZipInputStream zipInputStream = new ZipInputStream(inputStream)) {
-            ZipEntry entry;
-            int entries = 0;
+        try (ZipFile zipFile = openZipFile(archivePath)) {
+            int processedEntries = 0;
             long extractedBytes = 0;
-            while ((entry = zipInputStream.getNextEntry()) != null) {
-                if (++entries > ZIP_ENTRY_LIMIT) {
-                    throw AppException.badRequest("压缩包文件数量超过限制");
-                }
+            for (ZipEntry entry : entries) {
                 long entrySize = entry.getSize();
-                if (!entry.isDirectory() && entrySize > 0) {
-                    extractedBytes += entrySize;
-                    if (extractedBytes > ZIP_EXTRACTED_SIZE_LIMIT) {
-                        throw AppException.badRequest("压缩包解压后体积超过限制");
-                    }
-                }
                 List<String> parts = safeZipParts(entry.getName());
                 if (parts.isEmpty()) {
+                    processedEntries++;
+                    if (job != null) {
+                        job.advance(processedEntries, extractedBytes);
+                    }
                     continue;
                 }
                 CloudFile parent = ensureZipParent(user, extractRoot, parts.subList(0, parts.size() - 1));
@@ -302,20 +330,24 @@ public class FileService {
                 } else {
                     String uniqueName = uniqueName(user.getId(), parent.getId(), name);
                     String contentType = URLConnection.guessContentTypeFromName(uniqueName);
-                    FileStorageService.StoredObject stored = storageService.storeOpenStream(
-                            zipInputStream, user.getId(), uniqueName, contentType);
-                    storedObjects.add(stored);
-                    if (entrySize <= 0) {
-                        extractedBytes += stored.size();
-                        if (extractedBytes > ZIP_EXTRACTED_SIZE_LIMIT) {
-                            throw AppException.badRequest("压缩包解压后体积超过限制");
+                    try (InputStream entryStream = zipFile.getInputStream(entry)) {
+                        FileStorageService.StoredObject stored = storageService.storeStream(
+                                entryStream, user.getId(), uniqueName, contentType);
+                        storedObjects.add(stored);
+                        if (entrySize > 0) {
+                            extractedBytes += entrySize;
+                        } else {
+                            extractedBytes += stored.size();
                         }
+                        StorageObject object = resolveObject(stored);
+                        CloudFile extractedFile = buildFile(attachedUser(user), parent, uniqueName, object);
+                        extracted.add(fileMapper.toResponse(fileRepository.save(extractedFile)));
                     }
-                    StorageObject object = resolveObject(stored);
-                    CloudFile extractedFile = buildFile(attachedUser(user), parent, uniqueName, object);
-                    extracted.add(fileMapper.toResponse(fileRepository.save(extractedFile)));
                 }
-                zipInputStream.closeEntry();
+                processedEntries++;
+                if (job != null) {
+                    job.advance(processedEntries, extractedBytes);
+                }
             }
             extracted.add(0, fileMapper.toResponse(extractRoot));
             auditService.recordFileOperation(user, extractRoot, "EXTRACT", "来源压缩包: " + archive.getName());
@@ -595,6 +627,48 @@ public class FileService {
         }
     }
 
+    private List<ZipEntry> readZipEntries(Path archivePath) {
+        try (ZipFile zipFile = openZipFile(archivePath)) {
+            List<ZipEntry> entries = new ArrayList<>();
+            Enumeration<? extends ZipEntry> enumeration = zipFile.entries();
+            while (enumeration.hasMoreElements()) {
+                entries.add(enumeration.nextElement());
+            }
+            entries.forEach(entry -> safeZipParts(entry.getName()));
+            return entries;
+        } catch (IllegalArgumentException ex) {
+            throw AppException.badRequest("压缩包中存在非法路径");
+        } catch (IOException ex) {
+            throw AppException.badRequest("解压失败，请确认压缩包未损坏");
+        }
+    }
+
+    private ZipFile openZipFile(Path archivePath) throws IOException {
+        try {
+            return new ZipFile(archivePath.toFile(), StandardCharsets.UTF_8);
+        } catch (ZipException utf8Exception) {
+            return new ZipFile(archivePath.toFile(), Charset.forName("GBK"));
+        }
+    }
+
+    private ZipStats scanZipEntries(List<ZipEntry> entries) {
+        if (entries.size() > ZIP_ENTRY_LIMIT) {
+            throw AppException.badRequest("压缩包文件数量超过限制");
+        }
+        long totalBytes = 0;
+        for (ZipEntry entry : entries) {
+            safeZipParts(entry.getName());
+            long size = entry.getSize();
+            if (!entry.isDirectory() && size > 0) {
+                totalBytes += size;
+                if (totalBytes > ZIP_EXTRACTED_SIZE_LIMIT) {
+                    throw AppException.badRequest("压缩包解压后体积超过限制");
+                }
+            }
+        }
+        return new ZipStats(entries.size(), totalBytes);
+    }
+
     private CloudFile ensureFolder(User user, CloudFile parent, String name) {
         Long parentId = parent.getId();
         return fileRepository.findFirstByOwnerIdAndParentIdAndNameAndFileKindAndDeletedFalse(
@@ -705,5 +779,8 @@ public class FileService {
     }
 
     public record DownloadPayload(Resource resource, String filename, MediaType mediaType, long sizeBytes) {
+    }
+
+    private record ZipStats(int totalEntries, long totalBytes) {
     }
 }

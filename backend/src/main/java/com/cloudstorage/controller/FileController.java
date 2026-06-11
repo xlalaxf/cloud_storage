@@ -6,12 +6,14 @@ import com.cloudstorage.dto.FileDtos.CreateDirectLinkRequest;
 import com.cloudstorage.dto.FileDtos.CreateFolderRequest;
 import com.cloudstorage.dto.FileDtos.CreateShareRequest;
 import com.cloudstorage.dto.FileDtos.DirectLinkResponse;
+import com.cloudstorage.dto.FileDtos.ExtractJobResponse;
 import com.cloudstorage.dto.FileDtos.FileResponse;
 import com.cloudstorage.dto.FileDtos.FolderTreeNode;
 import com.cloudstorage.dto.FileDtos.MoveRequest;
 import com.cloudstorage.dto.FileDtos.RenameRequest;
 import com.cloudstorage.dto.FileDtos.ShareLinkResponse;
 import com.cloudstorage.model.User;
+import com.cloudstorage.service.ExtractJobService;
 import com.cloudstorage.service.FileService;
 import com.cloudstorage.service.LinkService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -40,10 +42,12 @@ import org.springframework.web.multipart.MultipartFile;
 public class FileController {
     private final FileService fileService;
     private final LinkService linkService;
+    private final ExtractJobService extractJobService;
 
-    public FileController(FileService fileService, LinkService linkService) {
+    public FileController(FileService fileService, LinkService linkService, ExtractJobService extractJobService) {
         this.fileService = fileService;
         this.linkService = linkService;
+        this.extractJobService = extractJobService;
     }
 
     @GetMapping
@@ -120,8 +124,13 @@ public class FileController {
     }
 
     @PostMapping("/{id}/extract")
-    public ApiResponse<List<FileResponse>> extract(@AuthenticationPrincipal User user, @PathVariable Long id) {
-        return ApiResponse.ok("解压完成", fileService.extractZip(user, id));
+    public ApiResponse<ExtractJobResponse> extract(@AuthenticationPrincipal User user, @PathVariable Long id) {
+        return ApiResponse.ok("解压任务已开始", extractJobService.start(user, id));
+    }
+
+    @GetMapping("/extract-jobs/{jobId}")
+    public ApiResponse<ExtractJobResponse> extractStatus(@AuthenticationPrincipal User user, @PathVariable String jobId) {
+        return ApiResponse.ok(extractJobService.status(user, jobId));
     }
 
     @DeleteMapping("/{id}")

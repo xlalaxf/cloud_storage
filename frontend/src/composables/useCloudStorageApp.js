@@ -83,6 +83,19 @@ export function useCloudStorageApp() {
     paused: false,
     cancellable: false,
   })
+  const extractProgress = reactive({
+    active: false,
+    fileId: null,
+    jobId: '',
+    label: '',
+    status: '',
+    percent: 0,
+    processedEntries: 0,
+    totalEntries: 0,
+    processedBytes: 0,
+    totalBytes: 0,
+    message: '',
+  })
   
   const MAX_AVATAR_SOURCE_BYTES = 10 * 1024 * 1024
   const MAX_AVATAR_STORED_BYTES = 100 * 1024
@@ -103,6 +116,10 @@ export function useCloudStorageApp() {
     currentCacheKey: '',
     pausedStartedAt: 0,
     pausedDuration: 0,
+  }
+  const extractControl = {
+    polling: null,
+    startingFileIds: new Set(),
   }
   
   const admin = reactive({
@@ -1275,16 +1292,79 @@ export function useCloudStorageApp() {
   
   async function extractSelected() {
     if (!selected.value) return
-    busy.value = true
+    const file = selected.value
+    if (extractProgress.active || extractControl.startingFileIds.has(file.id)) {
+      notify('解压任务正在进行', 'info')
+      return
+    }
+    extractControl.startingFileIds.add(file.id)
     try {
-      await request(`/files/${selected.value.id}/extract`, { method: 'POST', timeoutMs: 0 })
-      notify('解压完成', 'success')
-      await loadFiles()
+      const job = await request(`/files/${file.id}/extract`, { method: 'POST', timeoutMs: 30000 })
+      applyExtractJob(job)
+      startExtractPolling(job.jobId)
     } catch (error) {
       fail(error)
     } finally {
-      busy.value = false
+      extractControl.startingFileIds.delete(file.id)
     }
+  }
+
+  function applyExtractJob(job) {
+    if (!job) return
+    extractProgress.active = ['PENDING', 'SCANNING', 'RUNNING'].includes(job.status)
+    extractProgress.fileId = job.fileId
+    extractProgress.jobId = job.jobId
+    extractProgress.label = job.fileName ? `正在解压 ${job.fileName}` : '正在准备解压'
+    extractProgress.status = job.status
+    extractProgress.percent = job.percent || 0
+    extractProgress.processedEntries = job.processedEntries || 0
+    extractProgress.totalEntries = job.totalEntries || 0
+    extractProgress.processedBytes = job.processedBytes || 0
+    extractProgress.totalBytes = job.totalBytes || 0
+    extractProgress.message = job.message || ''
+  }
+
+  function clearExtractProgress() {
+    window.clearTimeout(extractControl.polling)
+    extractControl.polling = null
+    extractProgress.active = false
+    extractProgress.fileId = null
+    extractProgress.jobId = ''
+    extractProgress.label = ''
+    extractProgress.status = ''
+    extractProgress.percent = 0
+    extractProgress.processedEntries = 0
+    extractProgress.totalEntries = 0
+    extractProgress.processedBytes = 0
+    extractProgress.totalBytes = 0
+    extractProgress.message = ''
+  }
+
+  async function pollExtractJob(jobId) {
+    try {
+      const job = await request(`/files/extract-jobs/${jobId}`, { timeoutMs: 10000 })
+      applyExtractJob(job)
+      if (job.status === 'COMPLETED') {
+        notify('解压完成', 'success')
+        await loadFiles()
+        extractControl.polling = window.setTimeout(clearExtractProgress, 1200)
+        return
+      }
+      if (job.status === 'FAILED') {
+        notify(job.message || '解压失败', 'error')
+        extractControl.polling = window.setTimeout(clearExtractProgress, 2400)
+        return
+      }
+      startExtractPolling(jobId)
+    } catch (error) {
+      fail(error)
+      startExtractPolling(jobId, 3000)
+    }
+  }
+
+  function startExtractPolling(jobId, delay = 1000) {
+    window.clearTimeout(extractControl.polling)
+    extractControl.polling = window.setTimeout(() => pollExtractJob(jobId), delay)
   }
   
   async function loadLinks() {
@@ -1859,6 +1939,7 @@ export function useCloudStorageApp() {
   
   onBeforeUnmount(() => {
     clearAvatarUrl()
+    window.clearTimeout(extractControl.polling)
   })
 
   return {
@@ -1893,6 +1974,7 @@ export function useCloudStorageApp() {
     authForm,
     profileForm,
     uploadProgress,
+    extractProgress,
     MAX_AVATAR_SOURCE_BYTES,
     MAX_AVATAR_STORED_BYTES,
     AVATAR_MAX_SIDE,
