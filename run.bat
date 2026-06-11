@@ -4,6 +4,7 @@ setlocal
 set "ROOT=%~dp0"
 set "BACKEND_DIR=%ROOT%backend"
 set "FRONTEND_DIR=%ROOT%frontend"
+set "BACKEND_PROFILE_ARG="
 
 echo Cloud Storage one-click launcher
 echo Root: %ROOT%
@@ -48,10 +49,15 @@ if not exist "%FRONTEND_DIR%\node_modules" (
   popd
 )
 
+if exist "%BACKEND_DIR%\src\main\resources\application-local.properties" (
+  set "BACKEND_PROFILE_ARG= -Dspring-boot.run.profiles=local"
+  echo Using backend local profile from application-local.properties
+)
+
 powershell -NoProfile -Command "if (Get-NetTCPConnection -LocalPort 8080 -State Listen -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"
 if errorlevel 1 (
   echo Starting backend on http://localhost:8080
-  start "Cloud Storage Backend" cmd /k "cd /d ""%BACKEND_DIR%"" && call mvnw.cmd spring-boot:run"
+  start "Cloud Storage Backend" cmd /k "cd /d ""%BACKEND_DIR%"" && call mvnw.cmd spring-boot:run%BACKEND_PROFILE_ARG%"
 ) else (
   echo Backend is already running on http://localhost:8080
 )
