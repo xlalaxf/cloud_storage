@@ -58,16 +58,18 @@ if errorlevel 1 (
 
 powershell -NoProfile -Command "if (Get-NetTCPConnection -LocalPort 5173 -State Listen -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"
 if errorlevel 1 (
-  echo Starting frontend on http://127.0.0.1:5173
-  start "Cloud Storage Frontend" cmd /k "cd /d ""%FRONTEND_DIR%"" && call npm.cmd run dev -- --host 127.0.0.1"
+  echo Starting frontend on http://localhost:5173
+  start "Cloud Storage Frontend" cmd /k "cd /d ""%FRONTEND_DIR%"" && call npm.cmd run dev -- --host 0.0.0.0"
 ) else (
-  echo Frontend is already running on http://127.0.0.1:5173
+  echo Frontend is already running on http://localhost:5173
 )
 
 echo.
 echo Services are starting in separate windows.
-echo Frontend: http://127.0.0.1:5173
+echo Frontend local: http://localhost:5173
+echo Frontend LAN:   http://YOUR-LAN-IP:5173
 echo Backend:  http://localhost:8080
+echo Backend LAN:    http://YOUR-LAN-IP:8080
 echo Close the two service windows or press Ctrl+C inside them to stop.
 echo.
 pause
