@@ -303,6 +303,15 @@ public class FileService {
         }
     }
 
+    @Transactional(readOnly = true)
+    public String extractableFileName(User user, Long fileId) {
+        CloudFile archive = requireOwned(user, fileId);
+        if (archive.getFileKind() != FileKind.FILE || !isZip(archive)) {
+            throw AppException.badRequest("当前仅支持 ZIP 文件在线解压");
+        }
+        return archive.getName();
+    }
+
     public void extractZipJob(ExtractJobService.ExtractJob job) {
         List<FileResponse> extracted = extractZip(job.userId(), job.fileId(), job);
         if (!extracted.isEmpty()) {
@@ -783,8 +792,8 @@ public class FileService {
                             entryStream,
                             userId,
                             file.name(),
-                            file.contentType());
-                    processedBytes.addAndGet(file.size() > 0 ? file.size() : stored.size());
+                            file.contentType(),
+                            processedBytes::addAndGet);
                     processedFileEntries.incrementAndGet();
                     extracted.add(new ExtractedObject(file.index(), file.parentId(), file.name(), stored));
                 }

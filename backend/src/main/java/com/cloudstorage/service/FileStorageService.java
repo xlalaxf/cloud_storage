@@ -18,6 +18,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.Locale;
+import java.util.function.LongConsumer;
 import java.util.stream.Stream;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
@@ -55,6 +56,15 @@ public class FileStorageService {
 
     public StoredObject storeStreamFast(InputStream inputStream, Long userId, String safeName, String contentType) {
         return prepareObjectWithBuffer(inputStream, safeName, contentType, true);
+    }
+
+    public StoredObject storeStreamFast(
+            InputStream inputStream,
+            Long userId,
+            String safeName,
+            String contentType,
+            LongConsumer progressCallback) {
+        return prepareObjectWithBuffer(inputStream, safeName, contentType, true, progressCallback);
     }
 
     public StoredObject storeOpenStream(InputStream inputStream, Long userId, String safeName, String contentType) {
@@ -144,6 +154,15 @@ public class FileStorageService {
     }
 
     private StoredObject prepareObjectWithBuffer(InputStream inputStream, String safeName, String contentType, boolean closeInputStream) {
+        return prepareObjectWithBuffer(inputStream, safeName, contentType, closeInputStream, null);
+    }
+
+    private StoredObject prepareObjectWithBuffer(
+            InputStream inputStream,
+            String safeName,
+            String contentType,
+            boolean closeInputStream,
+            LongConsumer progressCallback) {
         Path temp = null;
         try {
             Files.createDirectories(root.resolve("tmp"));
@@ -152,7 +171,7 @@ public class FileStorageService {
             long size;
             DigestInputStream digestInputStream = new DigestInputStream(inputStream, digest);
             try {
-                size = copyToFile(digestInputStream, temp);
+                size = copyToFile(digestInputStream, temp, progressCallback);
             } finally {
                 if (closeInputStream) {
                     digestInputStream.close();
@@ -194,6 +213,10 @@ public class FileStorageService {
     }
 
     private long copyToFile(InputStream inputStream, Path target) throws IOException {
+        return copyToFile(inputStream, target, null);
+    }
+
+    private long copyToFile(InputStream inputStream, Path target, LongConsumer progressCallback) throws IOException {
         byte[] buffer = new byte[STREAM_BUFFER_SIZE];
         long total = 0;
         try (var outputStream = Files.newOutputStream(target)) {
@@ -201,6 +224,9 @@ public class FileStorageService {
             while ((read = inputStream.read(buffer)) >= 0) {
                 outputStream.write(buffer, 0, read);
                 total += read;
+                if (progressCallback != null && read > 0) {
+                    progressCallback.accept(read);
+                }
             }
         }
         return total;

@@ -42,8 +42,9 @@ public class ExtractJobService {
             return toResponse(existing);
         }
 
-        fileService.validateExtractable(user, fileId);
+        String fileName = fileService.extractableFileName(user, fileId);
         ExtractJob job = new ExtractJob(UUID.randomUUID().toString(), user.getId(), fileId);
+        job.queued(fileName);
         jobs.put(job.id, job);
         activeByUserFile.put(activeKey, job.id);
         executor.submit(() -> runJob(job, activeKey));
@@ -137,6 +138,12 @@ public class ExtractJobService {
             this.message = "正在分析压缩包";
         }
 
+        public void queued(String fileName) {
+            this.fileName = fileName == null ? "" : fileName;
+            this.status = ExtractStatus.PENDING;
+            this.message = "排队等待解压";
+        }
+
         public void extracting(int totalEntries, long totalBytes) {
             this.status = ExtractStatus.RUNNING;
             this.totalEntries = totalEntries;
@@ -191,11 +198,11 @@ public class ExtractJobService {
             if (status == ExtractStatus.SCANNING) {
                 return 1;
             }
-            if (totalEntries > 0) {
-                return Math.max(1, Math.min(99, (int) Math.floor((processedEntries * 100.0) / totalEntries)));
-            }
             if (totalBytes > 0) {
                 return Math.max(1, Math.min(99, (int) Math.floor((processedBytes * 100.0) / totalBytes)));
+            }
+            if (totalEntries > 0) {
+                return Math.max(1, Math.min(99, (int) Math.floor((processedEntries * 100.0) / totalEntries)));
             }
             return status == ExtractStatus.PENDING ? 0 : 1;
         }
