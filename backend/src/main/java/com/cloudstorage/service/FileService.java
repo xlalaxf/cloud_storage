@@ -1392,15 +1392,25 @@ public class FileService {
             return;
         }
         for (List<StorageObject> batch : batches(objects, DB_LOOKUP_BATCH_SIZE)) {
-            jdbcTemplate.batchUpdate(
-                    "update storage_objects set ref_count = ref_count + ?, updated_at = ? where id = ?",
-                    batch,
-                    batch.size(),
-                    (statement, object) -> {
-                        statement.setLong(1, refCountsByKey.getOrDefault(storedObjectKey(object), 0));
-                        statement.setTimestamp(2, Timestamp.from(Instant.now()));
-                        statement.setLong(3, object.getId());
-                    });
+            List<Object> args = new ArrayList<>(batch.size() * 3 + 1);
+            StringBuilder sql = new StringBuilder(
+                    "update storage_objects set ref_count = ref_count + case id ");
+            for (StorageObject object : batch) {
+                sql.append("when ? then ? ");
+                args.add(object.getId());
+                args.add(refCountsByKey.getOrDefault(storedObjectKey(object), 0));
+            }
+            sql.append("else 0 end, updated_at = ? where id in (");
+            args.add(Timestamp.from(Instant.now()));
+            for (int index = 0; index < batch.size(); index++) {
+                if (index > 0) {
+                    sql.append(',');
+                }
+                sql.append('?');
+                args.add(batch.get(index).getId());
+            }
+            sql.append(')');
+            jdbcTemplate.update(sql.toString(), args.toArray());
         }
     }
 
@@ -1435,15 +1445,48 @@ public class FileService {
     }
 
     private void cleanupCreatedObjects(List<FileStorageService.StoredObject> storedObjects) {
-        for (FileStorageService.StoredObject object : storedObjects) {
-            if (object.created()) {
-                try {
-                    storageService.deleteObject(object.relativePath());
-                } catch (AppException ignored) {
-                    // Cleanup is best effort; the original extraction error should stay visible.
-                }
+        Set<String> createdPaths = storedObjects.stream()
+                .filter(FileStorageService.StoredObject::created)
+                .map(FileStorageService.StoredObject::relativePath)
+                .filter(path -> path != null && !path.isBlank())
+                .collect(Collectors.toSet());
+        if (createdPaths.isEmpty()) {
+            return;
+        }
+
+        Set<String> referencedPaths;
+        try {
+            referencedPaths = referencedStoragePaths(createdPaths);
+        } catch (RuntimeException ex) {
+            log.warn("Skip extracted object cleanup because storage references cannot be checked", ex);
+            return;
+        }
+
+        for (String relativePath : createdPaths) {
+            if (referencedPaths.contains(relativePath)) {
+                continue;
+            }
+            try {
+                storageService.deleteObject(relativePath);
+            } catch (AppException ignored) {
+                // Cleanup is best effort; the original extraction error should stay visible.
             }
         }
+    }
+
+    private Set<String> referencedStoragePaths(Collection<String> relativePaths) {
+        if (relativePaths.isEmpty()) {
+            return Set.of();
+        }
+        Set<String> referencedPaths = new HashSet<>();
+        for (List<String> batch : batches(relativePaths, DB_LOOKUP_BATCH_SIZE)) {
+            referencedPaths.addAll(jdbcTemplate.queryForList(
+                    "select distinct relative_path from storage_objects where relative_path in ("
+                            + placeholders(batch.size()) + ")",
+                    String.class,
+                    batch.toArray()));
+        }
+        return referencedPaths;
     }
 
     private void cleanupExtractRoot(Long userId, ExtractPlan plan) {
