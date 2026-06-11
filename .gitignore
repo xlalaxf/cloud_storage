@@ -1,7 +1,7 @@
 backend/target/
 backend/storage/**
 !backend/storage/.gitkeep
-backend/src/main/resources/application-local.properties
+backend/src/main/resources/application.properties
 .playwright-mcp/
 frontend/node_modules/
 frontend/dist/
@@ -9,4 +9,3 @@ frontend/dist/
 *.local
 .idea/
 .vscode/
-.env
