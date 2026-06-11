@@ -5,6 +5,7 @@ import { useCloudStorageContext } from '../composables/appContext'
 const {
   busy,
   cleanupExpiredStorage,
+  cleanupOrphanStorageObjects,
   formatDate,
   formatSize,
   loadAdminSettings,
@@ -108,6 +109,16 @@ const {
       </button>
     </div>
 
+    <div class="maintenance-panel">
+      <div>
+        <strong>清理孤立本地文件</strong>
+        <span>扫描 storage/objects 目录，删除数据库没有登记的对象文件。已登记文件不会被删除。</span>
+      </div>
+      <button class="text-button danger-text" :disabled="busy || storageCleanup.orphanRunning" @click="cleanupOrphanStorageObjects">
+        <Trash2 :size="16" />{{ storageCleanup.orphanRunning ? '清理中' : '清理孤立文件' }}
+      </button>
+    </div>
+
     <div v-if="storageCleanup.result" class="cleanup-summary">
       <div>
         <strong>{{ formatSize(storageCleanup.result.releasedBytes || 0) }}</strong>
@@ -124,6 +135,25 @@ const {
       <div>
         <strong>{{ storageCleanup.result.failedTemporaryFiles || 0 }}</strong>
         <span>失败文件</span>
+      </div>
+    </div>
+
+    <div v-if="storageCleanup.orphanResult" class="cleanup-summary">
+      <div>
+        <strong>{{ formatSize(storageCleanup.orphanResult.releasedBytes || 0) }}</strong>
+        <span>释放空间</span>
+      </div>
+      <div>
+        <strong>{{ storageCleanup.orphanResult.scannedObjectFiles || 0 }}</strong>
+        <span>扫描对象</span>
+      </div>
+      <div>
+        <strong>{{ storageCleanup.orphanResult.deletedObjectFiles || 0 }}</strong>
+        <span>删除对象</span>
+      </div>
+      <div>
+        <strong>{{ storageCleanup.orphanResult.failedObjectFiles || 0 }}</strong>
+        <span>失败对象</span>
       </div>
     </div>
   </section>

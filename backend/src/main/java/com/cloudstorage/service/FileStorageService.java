@@ -17,7 +17,9 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.Locale;
+import java.util.Set;
 import java.util.function.LongConsumer;
 import java.util.stream.Stream;
 import org.springframework.beans.factory.annotation.Value;
@@ -339,6 +341,24 @@ public class FileStorageService {
         }
     }
 
+    public OrphanObjectCleanupResult cleanupOrphanObjects(Set<String> referencedPaths) {
+        Path objectsRoot = root.resolve("objects").normalize();
+        if (!objectsRoot.startsWith(root) || !Files.exists(objectsRoot)) {
+            return new OrphanObjectCleanupResult(0, 0, 0, 0);
+        }
+
+        Set<String> safeReferencedPaths = referencedPaths == null ? Set.of() : new HashSet<>(referencedPaths);
+        DeleteCounter counter = new DeleteCounter();
+        try (Stream<Path> paths = Files.walk(objectsRoot)) {
+            paths.filter(Files::isRegularFile)
+                    .forEach(path -> deleteIfUnreferencedObject(path, safeReferencedPaths, counter));
+        } catch (IOException ex) {
+            throw AppException.badRequest("孤立文件清理失败");
+        }
+        cleanupEmptyObjectDirectories(objectsRoot);
+        return new OrphanObjectCleanupResult(counter.scanned, counter.files, counter.bytes, counter.failures);
+    }
+
     private boolean isManagedTemporaryFile(Path path) {
         String name = path.getFileName().toString();
         return name.startsWith("upload-") && name.endsWith(".tmp");
@@ -357,6 +377,44 @@ public class FileStorageService {
             }
         } catch (IOException ex) {
             counter.failures++;
+        }
+    }
+
+    private void deleteIfUnreferencedObject(Path path, Set<String> referencedPaths, DeleteCounter counter) {
+        counter.scanned++;
+        String relativePath = normalizePath(root.relativize(path));
+        if (referencedPaths.contains(relativePath)) {
+            return;
+        }
+        try {
+            long size = Files.size(path);
+            if (Files.deleteIfExists(path)) {
+                counter.files++;
+                counter.bytes += size;
+            }
+        } catch (IOException ex) {
+            counter.failures++;
+        }
+    }
+
+    private void cleanupEmptyObjectDirectories(Path objectsRoot) {
+        try (Stream<Path> paths = Files.walk(objectsRoot)) {
+            paths.filter(Files::isDirectory)
+                    .sorted(Comparator.reverseOrder())
+                    .filter(path -> !path.equals(objectsRoot))
+                    .forEach(this::deleteDirectoryIfEmpty);
+        } catch (IOException ignored) {
+            // Empty directory cleanup is best effort.
+        }
+    }
+
+    private void deleteDirectoryIfEmpty(Path path) {
+        try (Stream<Path> entries = Files.list(path)) {
+            if (entries.findAny().isEmpty()) {
+                Files.deleteIfExists(path);
+            }
+        } catch (IOException ignored) {
+            // Directory may contain new files or be locked; leave it for a later cleanup.
         }
     }
 
@@ -435,6 +493,7 @@ public class FileStorageService {
     }
 
     private static final class DeleteCounter {
+        private long scanned;
         private long files;
         private long bytes;
         private long failures;
@@ -457,5 +516,8 @@ public class FileStorageService {
     }
 
     public record TemporaryCleanupResult(long files, long bytes, long failures) {
+    }
+
+    public record OrphanObjectCleanupResult(long scannedFiles, long files, long bytes, long failures) {
     }
 }

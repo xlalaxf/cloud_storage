@@ -36,4 +36,7 @@ public interface CloudFileRepository extends JpaRepository<CloudFile, Long> {
     @Modifying
     @Query("update CloudFile file set file.object = null where file.object.id = :objectId")
     int detachObject(Long objectId);
+
+    @Query("select file.relativePath from CloudFile file where file.deleted = false and file.fileKind = 'FILE' and file.relativePath is not null")
+    List<String> findActiveFileRelativePaths();
 }

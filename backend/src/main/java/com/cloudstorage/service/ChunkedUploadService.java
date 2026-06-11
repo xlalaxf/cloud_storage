@@ -1,7 +1,8 @@
 package com.cloudstorage.service;
 
-import com.cloudstorage.dto.FileDtos.FileResponse;
+import com.cloudstorage.dto.AdminDtos.OrphanStorageCleanupResponse;
 import com.cloudstorage.dto.AdminDtos.StorageCleanupResponse;
+import com.cloudstorage.dto.FileDtos.FileResponse;
 import com.cloudstorage.dto.UploadDtos.ChunkResponse;
 import com.cloudstorage.dto.UploadDtos.CompleteUploadRequest;
 import com.cloudstorage.dto.UploadDtos.InitUploadRequest;
@@ -29,8 +30,10 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.Vector;
+import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -229,6 +232,23 @@ public class ChunkedUploadService {
                 temporary.bytes(),
                 temporary.failures(),
                 expiredUploadBytes + temporary.bytes());
+    }
+
+    @Transactional(readOnly = true)
+    public OrphanStorageCleanupResponse cleanupOrphanStorageObjects() {
+        Set<String> referencedPaths = objectRepository.findAllRelativePaths().stream()
+                .filter(path -> path != null && !path.isBlank())
+                .collect(Collectors.toSet());
+        referencedPaths.addAll(fileRepository.findActiveFileRelativePaths().stream()
+                .filter(path -> path != null && !path.isBlank())
+                .collect(Collectors.toSet()));
+        FileStorageService.OrphanObjectCleanupResult result = storageService.cleanupOrphanObjects(referencedPaths);
+        return new OrphanStorageCleanupResponse(
+                result.scannedFiles(),
+                result.files(),
+                result.bytes(),
+                result.failures(),
+                result.bytes());
     }
 
     private UploadSession requireSession(User user, String uploadId) {

@@ -5,6 +5,7 @@ import com.cloudstorage.dto.AdminDtos.AuditClearResponse;
 import com.cloudstorage.dto.AdminDtos.BanUserRequest;
 import com.cloudstorage.dto.AdminDtos.FileOperationAuditResponse;
 import com.cloudstorage.dto.AdminDtos.LoginAuditResponse;
+import com.cloudstorage.dto.AdminDtos.OrphanStorageCleanupResponse;
 import com.cloudstorage.dto.AdminDtos.StorageCleanupResponse;
 import com.cloudstorage.dto.ApiResponse;
 import com.cloudstorage.dto.FileDtos.FileResponse;
@@ -118,6 +119,11 @@ public class AdminController {
     @PostMapping("/storage/cleanup-expired")
     public ApiResponse<StorageCleanupResponse> cleanupExpiredStorage() {
         return ApiResponse.ok("过期临时文件已清理", uploadService.cleanupExpiredStorage());
+    }
+
+    @PostMapping("/storage/cleanup-orphans")
+    public ApiResponse<OrphanStorageCleanupResponse> cleanupOrphanStorageObjects() {
+        return ApiResponse.ok("孤立本地文件已清理", uploadService.cleanupOrphanStorageObjects());
     }
 
     @DeleteMapping("/files/{fileId}")

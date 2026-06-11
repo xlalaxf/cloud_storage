@@ -38,6 +38,8 @@ export function useCloudStorageApp() {
   const storageCleanup = reactive({
     running: false,
     result: null,
+    orphanRunning: false,
+    orphanResult: null,
   })
   const foldersStack = ref([{ id: null, name: '全部文件' }])
   const searchText = ref('')
@@ -1982,6 +1984,27 @@ export function useCloudStorageApp() {
       storageCleanup.running = false
     }
   }
+
+  async function cleanupOrphanStorageObjects() {
+    if (!isAdmin.value || storageCleanup.orphanRunning) return
+    const confirmed = await confirmAction({
+      title: '清理孤立本地文件',
+      message: '将扫描本地 storage/objects 目录，删除数据库 storage_objects 表中没有登记的对象文件。已登记文件不会被删除。',
+      confirmText: '开始清理',
+      danger: true,
+    })
+    if (!confirmed) return
+    storageCleanup.orphanRunning = true
+    try {
+      const result = await request('/admin/storage/cleanup-orphans', { method: 'POST', timeoutMs: 0 })
+      storageCleanup.orphanResult = result
+      notify(`已释放 ${formatSize(result.releasedBytes || 0)}`, 'success')
+    } catch (error) {
+      fail(error)
+    } finally {
+      storageCleanup.orphanRunning = false
+    }
+  }
   
   async function selectAdminUser(user, mode = activeTab.value) {
     admin.selectedUser = user
@@ -2457,6 +2480,7 @@ export function useCloudStorageApp() {
     loadAdminSettings,
     saveSystemSettings,
     cleanupExpiredStorage,
+    cleanupOrphanStorageObjects,
     selectAdminUser,
     loadSelectedAdminContext,
     loadAdminDetail,

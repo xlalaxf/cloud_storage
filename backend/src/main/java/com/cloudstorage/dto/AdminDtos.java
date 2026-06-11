@@ -63,4 +63,12 @@ public final class AdminDtos {
             long failedTemporaryFiles,
             long releasedBytes) {
     }
+
+    public record OrphanStorageCleanupResponse(
+            long scannedObjectFiles,
+            long deletedObjectFiles,
+            long deletedObjectBytes,
+            long failedObjectFiles,
+            long releasedBytes) {
+    }
 }
