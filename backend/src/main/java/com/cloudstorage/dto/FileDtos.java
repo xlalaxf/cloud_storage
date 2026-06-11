@@ -100,4 +100,25 @@ public final class FileDtos {
             Instant startedAt,
             Instant completedAt) {
     }
+
+    public record ArchiveJobResponse(
+            String jobId,
+            Long fileId,
+            String fileName,
+            String status,
+            int percent,
+            int processedEntries,
+            int totalEntries,
+            long processedBytes,
+            long totalBytes,
+            String currentEntryName,
+            long speedBytesPerSecond,
+            long elapsedMillis,
+            String message,
+            String downloadPath,
+            String downloadName,
+            long archiveSizeBytes,
+            Instant startedAt,
+            Instant completedAt) {
+    }
 }

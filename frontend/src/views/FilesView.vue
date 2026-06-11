@@ -29,6 +29,7 @@ const {
   deleteSelectedFiles,
   downloadFile,
   downloadSelectedFiles,
+  archiveProgress,
   dragActive,
   extractProgress,
   extractSelected,
@@ -121,6 +122,24 @@ const {
       </div>
     </div>
 
+    <div v-if="archiveProgress.active" class="upload-progress extract-progress" role="status" aria-live="polite">
+      <div class="upload-progress-top">
+        <strong>{{ archiveProgress.label }}</strong>
+        <span>{{ archiveProgress.percent }}%</span>
+      </div>
+      <div class="upload-progress-meta">
+        <span>{{ archiveProgress.message }}</span>
+        <span v-if="archiveProgress.totalEntries">{{ archiveProgress.processedEntries }} / {{ archiveProgress.totalEntries }} 项</span>
+        <span v-if="archiveProgress.totalBytes">{{ formatSize(archiveProgress.processedBytes) }} / {{ formatSize(archiveProgress.totalBytes) }}</span>
+        <span v-if="archiveProgress.speed">{{ formatSpeed(archiveProgress.speed) }}</span>
+        <span v-if="archiveProgress.elapsed">已用 {{ formatDuration(archiveProgress.elapsed) }}</span>
+        <span v-if="archiveProgress.currentEntryName" class="extract-current">{{ archiveProgress.currentEntryName }}</span>
+      </div>
+      <div class="upload-bar" aria-hidden="true">
+        <span :style="{ width: `${archiveProgress.percent}%` }"></span>
+      </div>
+    </div>
+
     <div class="file-table">
       <div class="file-head">
         <input
@@ -170,7 +189,7 @@ const {
       <h2>已选择 {{ selectedFiles.length }} 个项目</h2>
       <p>{{ selectedFileItems.length }} 个文件 · {{ selectedFolderItems.length }} 个文件夹</p>
       <div class="action-grid">
-        <button :disabled="!selectedFiles.length || busy" @click="downloadSelectedFiles"><Download :size="17" />下载选中</button>
+        <button :disabled="!selectedFiles.length || busy || archiveProgress.active" @click="downloadSelectedFiles"><Download :size="17" />下载选中</button>
         <button :disabled="busy" @click="openMoveDialog('move')"><MoveRight :size="17" />移动到</button>
         <button :disabled="busy" @click="openMoveDialog('copy')"><Copy :size="17" />复制到</button>
         <button @click="clearSelection"><RefreshCw :size="17" />取消选择</button>
@@ -184,7 +203,7 @@ const {
       <div class="action-grid">
         <button class="secondary-action" @click="openFileInfo(selected)"><Info :size="17" />详情</button>
         <button @click="openPreview(selected)"><Eye :size="17" />预览</button>
-        <button @click="downloadFile(selected)"><Download :size="17" />下载</button>
+        <button :disabled="archiveProgress.active" @click="downloadFile(selected)"><Download :size="17" />下载</button>
         <button @click="renameSelected"><Pencil :size="17" />重命名</button>
         <button @click="openMoveDialog('move')"><MoveRight :size="17" />移动</button>
         <button @click="openMoveDialog('copy')"><Copy :size="17" />复制</button>

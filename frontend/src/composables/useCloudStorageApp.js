@@ -99,6 +99,22 @@ export function useCloudStorageApp() {
     elapsed: 0,
     message: '',
   })
+  const archiveProgress = reactive({
+    active: false,
+    fileId: null,
+    jobId: '',
+    label: '',
+    status: '',
+    percent: 0,
+    processedEntries: 0,
+    totalEntries: 0,
+    processedBytes: 0,
+    totalBytes: 0,
+    currentEntryName: '',
+    speed: 0,
+    elapsed: 0,
+    message: '',
+  })
   
   const MAX_AVATAR_SOURCE_BYTES = 10 * 1024 * 1024
   const MAX_AVATAR_STORED_BYTES = 100 * 1024
@@ -123,6 +139,12 @@ export function useCloudStorageApp() {
   const extractControl = {
     polling: null,
     startingFileIds: new Set(),
+  }
+  const archiveControl = {
+    polling: null,
+    startingFileIds: new Set(),
+    pendingQueue: [],
+    downloadingJobIds: new Set(),
   }
   
   const admin = reactive({
@@ -1085,8 +1107,12 @@ export function useCloudStorageApp() {
   
   async function downloadFile(file) {
     try {
-      await downloadBlob(`/files/${file.id}/download`, downloadName(file))
-      file.downloadCount += 1
+      if (file.fileKind === 'FOLDER') {
+        await startArchiveDownload(file)
+      } else {
+        await downloadBlob(`/files/${file.id}/download`, downloadName(file))
+        file.downloadCount += 1
+      }
     } catch (error) {
       fail(error)
     }
@@ -1233,7 +1259,11 @@ export function useCloudStorageApp() {
     busy.value = true
     try {
       for (const file of selectedFiles.value) {
-        await downloadBlob(`/files/${file.id}/download`, downloadName(file))
+        if (file.fileKind === 'FOLDER') {
+          await startArchiveDownload(file, { queueRemaining: true })
+        } else {
+          await downloadBlob(`/files/${file.id}/download`, downloadName(file))
+        }
       }
       await loadFiles()
     } catch (error) {
@@ -1374,6 +1404,116 @@ export function useCloudStorageApp() {
   function startExtractPolling(jobId, delay = 1000) {
     window.clearTimeout(extractControl.polling)
     extractControl.polling = window.setTimeout(() => pollExtractJob(jobId), delay)
+  }
+
+  async function startArchiveDownload(file, options = {}) {
+    if (!file || file.fileKind !== 'FOLDER') return
+    if (archiveProgress.active || archiveControl.startingFileIds.has(file.id)) {
+      if (options.queueRemaining) {
+        archiveControl.pendingQueue.push(file)
+        return
+      }
+      notify('压缩任务正在进行', 'info')
+      return
+    }
+    archiveControl.startingFileIds.add(file.id)
+    try {
+      const job = await request(`/files/${file.id}/archive`, { method: 'POST', timeoutMs: 30000 })
+      applyArchiveJob(job)
+      startArchivePolling(job.jobId)
+    } catch (error) {
+      fail(error)
+    } finally {
+      archiveControl.startingFileIds.delete(file.id)
+    }
+  }
+
+  function applyArchiveJob(job) {
+    if (!job) return
+    archiveProgress.active = ['PENDING', 'SCANNING', 'RUNNING'].includes(job.status)
+    archiveProgress.fileId = job.fileId
+    archiveProgress.jobId = job.jobId
+    archiveProgress.label = job.fileName ? `正在压缩 ${job.fileName}` : '正在准备压缩'
+    archiveProgress.status = job.status
+    archiveProgress.percent = job.percent || 0
+    archiveProgress.processedEntries = job.processedEntries || 0
+    archiveProgress.totalEntries = job.totalEntries || 0
+    archiveProgress.processedBytes = job.processedBytes || 0
+    archiveProgress.totalBytes = job.totalBytes || 0
+    archiveProgress.currentEntryName = job.currentEntryName || ''
+    archiveProgress.speed = job.speedBytesPerSecond || 0
+    archiveProgress.elapsed = Math.round((job.elapsedMillis || 0) / 1000)
+    archiveProgress.message = job.message || ''
+  }
+
+  function clearArchiveProgress() {
+    window.clearTimeout(archiveControl.polling)
+    archiveControl.polling = null
+    archiveProgress.active = false
+    archiveProgress.fileId = null
+    archiveProgress.jobId = ''
+    archiveProgress.label = ''
+    archiveProgress.status = ''
+    archiveProgress.percent = 0
+    archiveProgress.processedEntries = 0
+    archiveProgress.totalEntries = 0
+    archiveProgress.processedBytes = 0
+    archiveProgress.totalBytes = 0
+    archiveProgress.currentEntryName = ''
+    archiveProgress.speed = 0
+    archiveProgress.elapsed = 0
+    archiveProgress.message = ''
+  }
+
+  async function pollArchiveJob(jobId) {
+    try {
+      const job = await request(`/files/archive-jobs/${jobId}`, { timeoutMs: 10000 })
+      applyArchiveJob(job)
+      if (job.status === 'COMPLETED') {
+        await downloadCompletedArchive(job)
+        notify('压缩下载已准备完成', 'success')
+        await loadFiles()
+        archiveControl.polling = window.setTimeout(() => {
+          clearArchiveProgress()
+          startNextQueuedArchiveDownload()
+        }, 1200)
+        return
+      }
+      if (job.status === 'FAILED') {
+        notify(job.message || '压缩失败', 'error')
+        archiveControl.polling = window.setTimeout(() => {
+          clearArchiveProgress()
+          startNextQueuedArchiveDownload()
+        }, 2400)
+        return
+      }
+      startArchivePolling(jobId)
+    } catch (error) {
+      fail(error)
+      startArchivePolling(jobId, 3000)
+    }
+  }
+
+  function startArchivePolling(jobId, delay = 1000) {
+    window.clearTimeout(archiveControl.polling)
+    archiveControl.polling = window.setTimeout(() => pollArchiveJob(jobId), delay)
+  }
+
+  async function downloadCompletedArchive(job) {
+    if (!job?.downloadPath || archiveControl.downloadingJobIds.has(job.jobId)) return
+    archiveControl.downloadingJobIds.add(job.jobId)
+    try {
+      await downloadBlob(job.downloadPath, job.downloadName || downloadName({ fileKind: 'FOLDER', name: job.fileName || 'folder' }))
+    } finally {
+      archiveControl.downloadingJobIds.delete(job.jobId)
+    }
+  }
+
+  function startNextQueuedArchiveDownload() {
+    const next = archiveControl.pendingQueue.shift()
+    if (next) {
+      void startArchiveDownload(next, { queueRemaining: true })
+    }
   }
   
   async function loadLinks() {
@@ -1953,6 +2093,7 @@ export function useCloudStorageApp() {
   onBeforeUnmount(() => {
     clearAvatarUrl()
     window.clearTimeout(extractControl.polling)
+    window.clearTimeout(archiveControl.polling)
   })
 
   return {
@@ -1988,6 +2129,7 @@ export function useCloudStorageApp() {
     profileForm,
     uploadProgress,
     extractProgress,
+    archiveProgress,
     MAX_AVATAR_SOURCE_BYTES,
     MAX_AVATAR_STORED_BYTES,
     AVATAR_MAX_SIDE,

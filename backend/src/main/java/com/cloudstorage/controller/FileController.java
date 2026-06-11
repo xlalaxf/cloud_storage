@@ -1,6 +1,7 @@
 package com.cloudstorage.controller;
 
 import com.cloudstorage.dto.ApiResponse;
+import com.cloudstorage.dto.FileDtos.ArchiveJobResponse;
 import com.cloudstorage.dto.FileDtos.BatchFileRequest;
 import com.cloudstorage.dto.FileDtos.CreateDirectLinkRequest;
 import com.cloudstorage.dto.FileDtos.CreateFolderRequest;
@@ -13,6 +14,7 @@ import com.cloudstorage.dto.FileDtos.MoveRequest;
 import com.cloudstorage.dto.FileDtos.RenameRequest;
 import com.cloudstorage.dto.FileDtos.ShareLinkResponse;
 import com.cloudstorage.model.User;
+import com.cloudstorage.service.ArchiveJobService;
 import com.cloudstorage.service.ExtractJobService;
 import com.cloudstorage.service.FileService;
 import com.cloudstorage.service.LinkService;
@@ -43,11 +45,17 @@ public class FileController {
     private final FileService fileService;
     private final LinkService linkService;
     private final ExtractJobService extractJobService;
+    private final ArchiveJobService archiveJobService;
 
-    public FileController(FileService fileService, LinkService linkService, ExtractJobService extractJobService) {
+    public FileController(
+            FileService fileService,
+            LinkService linkService,
+            ExtractJobService extractJobService,
+            ArchiveJobService archiveJobService) {
         this.fileService = fileService;
         this.linkService = linkService;
         this.extractJobService = extractJobService;
+        this.archiveJobService = archiveJobService;
     }
 
     @GetMapping
@@ -77,7 +85,7 @@ public class FileController {
 
     @GetMapping("/{id}/download")
     public ResponseEntity<?> download(@AuthenticationPrincipal User user, @PathVariable Long id) {
-        return binary(fileService.downloadItemOwned(user, id), true);
+        return binary(fileService.downloadFileOwned(user, id), true);
     }
 
     @GetMapping("/{id}/preview")
@@ -131,6 +139,21 @@ public class FileController {
     @GetMapping("/extract-jobs/{jobId}")
     public ApiResponse<ExtractJobResponse> extractStatus(@AuthenticationPrincipal User user, @PathVariable String jobId) {
         return ApiResponse.ok(extractJobService.status(user, jobId));
+    }
+
+    @PostMapping("/{id}/archive")
+    public ApiResponse<ArchiveJobResponse> archive(@AuthenticationPrincipal User user, @PathVariable Long id) {
+        return ApiResponse.ok("压缩任务已开始", archiveJobService.start(user, id));
+    }
+
+    @GetMapping("/archive-jobs/{jobId}")
+    public ApiResponse<ArchiveJobResponse> archiveStatus(@AuthenticationPrincipal User user, @PathVariable String jobId) {
+        return ApiResponse.ok(archiveJobService.status(user, jobId));
+    }
+
+    @GetMapping("/archive-jobs/{jobId}/download")
+    public ResponseEntity<?> archiveDownload(@AuthenticationPrincipal User user, @PathVariable String jobId) {
+        return binary(archiveJobService.download(user, jobId), true);
     }
 
     @DeleteMapping("/{id}")

@@ -13,6 +13,7 @@ import com.cloudstorage.repository.CloudFileRepository;
 import com.cloudstorage.repository.StorageObjectRepository;
 import com.cloudstorage.repository.UserRepository;
 import java.io.FilterInputStream;
+import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -46,6 +47,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
+import java.util.zip.Deflater;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipException;
 import java.util.zip.ZipFile;
@@ -261,11 +263,12 @@ public class FileService {
     }
 
     @Transactional
-    public DownloadPayload downloadItemOwned(User user, Long fileId) {
+    public DownloadPayload downloadFileOwned(User user, Long fileId) {
         CloudFile file = requireOwned(user, fileId);
-        DownloadPayload payload = file.getFileKind() == FileKind.FOLDER
-                ? downloadFolder(file, true)
-                : download(file, true);
+        if (file.getFileKind() != FileKind.FILE) {
+            throw AppException.badRequest("文件夹请使用压缩下载");
+        }
+        DownloadPayload payload = download(file, true);
         auditService.recordFileOperation(user, file, "DOWNLOAD", null);
         return payload;
     }
@@ -291,25 +294,92 @@ public class FileService {
         if (increaseCount) {
             folder.setDownloadCount(folder.getDownloadCount() + 1);
         }
+        FolderArchive archive = createFolderArchive(folder.getOwner().getId(), folder.getId(), null);
+        try {
+            return new DownloadPayload(
+                    tempZipResource(archive.path()),
+                    archive.filename(),
+                    MediaType.parseMediaType("application/zip"),
+                    archive.sizeBytes());
+        } catch (IOException ex) {
+            deleteTempZip(archive.path());
+            throw AppException.badRequest("文件夹打包失败");
+        }
+    }
+
+    @Transactional(readOnly = true)
+    public String archivableFolderName(User user, Long fileId) {
+        CloudFile folder = requireOwned(user, fileId);
+        if (folder.getFileKind() != FileKind.FOLDER) {
+            throw AppException.badRequest("请选择文件夹进行压缩下载");
+        }
+        return folder.getName();
+    }
+
+    public void createFolderArchiveJob(ArchiveJobService.ArchiveJob job) {
+        FolderArchive archive = createFolderArchive(job.userId(), job.fileId(), job);
+        recordArchiveDownload(job.userId(), job.fileId());
+        job.complete(archive.path(), archive.filename(), archive.sizeBytes());
+    }
+
+    private void recordArchiveDownload(Long userId, Long folderId) {
+        transactionTemplate.executeWithoutResult(status -> {
+            User user = userRepository.findById(userId).orElseThrow(() -> AppException.notFound("用户不存在"));
+            CloudFile folder = requireOwned(user, folderId);
+            folder.setDownloadCount(folder.getDownloadCount() + 1);
+            auditService.recordFileOperation(user, folder, "DOWNLOAD", null);
+        });
+    }
+
+    public Resource tempArchiveResource(Path zipPath) {
+        try {
+            return tempZipResource(zipPath);
+        } catch (IOException ex) {
+            deleteTempZip(zipPath);
+            throw AppException.badRequest("压缩包下载失败");
+        }
+    }
+
+    public void deleteTempArchive(Path zipPath) {
+        deleteTempZip(zipPath);
+    }
+
+    private FolderArchive createFolderArchive(Long userId, Long folderId, ArchiveJobService.ArchiveJob job) {
+        long totalStartedNanos = System.nanoTime();
+        long scanStartedNanos = System.nanoTime();
+        FolderArchivePlan plan = loadFolderArchivePlan(userId, folderId);
+        log.info(
+                "Archive scan done folderId={} folderName={} folders={} files={} bytes={} elapsedMs={}",
+                folderId,
+                plan.rootName(),
+                plan.folderCount(),
+                plan.fileCount(),
+                plan.totalBytes(),
+                elapsedMs(scanStartedNanos));
+        if (job != null) {
+            job.compressing(plan.totalEntries(), plan.totalBytes());
+        }
+
         Path zipPath = storageService.createTempFile("folder-", ".zip");
-        try (OutputStream outputStream = Files.newOutputStream(zipPath);
-                ZipOutputStream zipOutputStream = new ZipOutputStream(outputStream)) {
-            writeFolderToZip(folder, zipPart(folder.getName()) + "/", zipOutputStream);
+        try {
+            long writeStartedNanos = System.nanoTime();
+            writeArchivePlan(zipPath, plan, job);
+            long size = Files.size(zipPath);
+            log.info(
+                    "Archive write done folderId={} folderName={} entries={} inputBytes={} archiveBytes={} writeMs={} totalMs={}",
+                    folderId,
+                    plan.rootName(),
+                    plan.totalEntries(),
+                    plan.totalBytes(),
+                    size,
+                    elapsedMs(writeStartedNanos),
+                    elapsedMs(totalStartedNanos));
+            return new FolderArchive(zipPath, zipFilename(plan.rootName()), size);
         } catch (Exception ex) {
             deleteTempZip(zipPath);
             if (ex instanceof AppException appException) {
                 throw appException;
             }
-            throw AppException.badRequest("文件夹打包失败");
-        }
-        try {
-            return new DownloadPayload(
-                    tempZipResource(zipPath),
-                    zipFilename(folder.getName()),
-                    MediaType.parseMediaType("application/zip"),
-                    Files.size(zipPath));
-        } catch (IOException ex) {
-            deleteTempZip(zipPath);
             throw AppException.badRequest("文件夹打包失败");
         }
     }
@@ -1524,6 +1594,134 @@ public class FileService {
                 || "application/x-zip-compressed".equalsIgnoreCase(file.getContentType());
     }
 
+    private FolderArchivePlan loadFolderArchivePlan(Long userId, Long folderId) {
+        List<ArchiveRow> rows = jdbcTemplate.query(
+                """
+                        with recursive subtree as (
+                            select f.id, f.parent_id, f.file_kind, f.name, f.object_id, f.size_bytes, f.relative_path, f.content_type, 0 as depth
+                            from files f
+                            where f.id = ? and f.owner_id = ? and f.deleted = false
+                            union all
+                            select child.id, child.parent_id, child.file_kind, child.name, child.object_id, child.size_bytes, child.relative_path, child.content_type, parent.depth + 1
+                            from files child
+                            join subtree parent on child.parent_id = parent.id
+                            where child.owner_id = ? and child.deleted = false
+                        )
+                        select s.id, s.parent_id, s.file_kind, s.name, s.object_id, s.size_bytes, s.relative_path, s.content_type,
+                               o.relative_path as object_relative_path, o.size_bytes as object_size_bytes
+                        from subtree s
+                        left join storage_objects o on s.object_id = o.id
+                        order by s.depth asc, s.file_kind desc, s.name asc
+                        """,
+                (resultSet, rowNum) -> new ArchiveRow(
+                        resultSet.getLong("id"),
+                        resultSet.getObject("parent_id", Long.class),
+                        FileKind.valueOf(resultSet.getString("file_kind")),
+                        resultSet.getString("name"),
+                        resultSet.getObject("object_id", Long.class),
+                        resultSet.getLong("size_bytes"),
+                        resultSet.getString("relative_path"),
+                        resultSet.getString("content_type"),
+                        resultSet.getString("object_relative_path"),
+                        resultSet.getLong("object_size_bytes")),
+                folderId,
+                userId,
+                userId);
+        if (rows.isEmpty() || rows.get(0).fileKind() != FileKind.FOLDER) {
+            throw AppException.notFound("文件夹不存在");
+        }
+
+        Map<Long, List<ArchiveRow>> byParent = rows.stream()
+                .filter(row -> row.parentId() != null)
+                .collect(Collectors.groupingBy(ArchiveRow::parentId));
+        List<ArchiveEntryPlan> entries = new ArrayList<>(rows.size());
+        ArchiveRow root = rows.get(0);
+        buildArchiveEntries(root, zipPart(root.name()) + "/", byParent, entries);
+        int folderCount = 0;
+        int fileCount = 0;
+        long totalBytes = 0;
+        for (ArchiveEntryPlan entry : entries) {
+            if (entry.directory()) {
+                folderCount++;
+            } else {
+                fileCount++;
+                totalBytes += entry.sizeBytes();
+            }
+        }
+        return new FolderArchivePlan(root.name(), entries, folderCount, fileCount, totalBytes);
+    }
+
+    private void buildArchiveEntries(
+            ArchiveRow row,
+            String entryName,
+            Map<Long, List<ArchiveRow>> byParent,
+            List<ArchiveEntryPlan> entries) {
+        if (row.fileKind() == FileKind.FOLDER) {
+            entries.add(ArchiveEntryPlan.directory(entryName));
+            List<ArchiveRow> children = byParent.getOrDefault(row.id(), List.of()).stream()
+                    .sorted(Comparator.comparing(ArchiveRow::fileKind).reversed().thenComparing(ArchiveRow::name))
+                    .toList();
+            for (ArchiveRow child : children) {
+                buildArchiveEntries(child, entryName + zipPart(child.name()) + (child.fileKind() == FileKind.FOLDER ? "/" : ""), byParent, entries);
+            }
+            return;
+        }
+        String relativePath = row.objectRelativePath() == null ? row.relativePath() : row.objectRelativePath();
+        long sizeBytes = row.objectId() == null ? row.sizeBytes() : row.objectSizeBytes();
+        entries.add(ArchiveEntryPlan.file(entryName, relativePath, sizeBytes));
+    }
+
+    private void writeArchivePlan(Path zipPath, FolderArchivePlan plan, ArchiveJobService.ArchiveJob job) throws IOException {
+        int processedEntries = 0;
+        long processedBytes = 0;
+        try (OutputStream outputStream = new BufferedOutputStream(Files.newOutputStream(zipPath), 1024 * 1024);
+                ZipOutputStream zipOutputStream = new ZipOutputStream(outputStream)) {
+            zipOutputStream.setLevel(Deflater.BEST_SPEED);
+            for (ArchiveEntryPlan entry : plan.entries()) {
+                if (entry.directory()) {
+                    zipOutputStream.putNextEntry(new ZipEntry(entry.entryName()));
+                    zipOutputStream.closeEntry();
+                    processedEntries++;
+                    if (job != null) {
+                        job.advance(processedEntries, processedBytes, entry.entryName());
+                    }
+                    continue;
+                }
+                zipOutputStream.putNextEntry(new ZipEntry(entry.entryName()));
+                try (InputStream inputStream = storageService.resource(entry.relativePath()).getInputStream()) {
+                    processedBytes += copyToZip(inputStream, zipOutputStream, job, processedEntries, processedBytes, entry.entryName());
+                }
+                zipOutputStream.closeEntry();
+                processedEntries++;
+                if (job != null) {
+                    job.advance(processedEntries, processedBytes, entry.entryName());
+                }
+            }
+        }
+    }
+
+    private long copyToZip(
+            InputStream inputStream,
+            ZipOutputStream zipOutputStream,
+            ArchiveJobService.ArchiveJob job,
+            int processedEntries,
+            long baseProcessedBytes,
+            String entryName) throws IOException {
+        byte[] buffer = new byte[1024 * 1024];
+        long copied = 0;
+        int read;
+        long lastProgressNanos = System.nanoTime();
+        while ((read = inputStream.read(buffer)) >= 0) {
+            zipOutputStream.write(buffer, 0, read);
+            copied += read;
+            if (job != null && Duration.ofNanos(System.nanoTime() - lastProgressNanos).toMillis() >= 250) {
+                job.advance(processedEntries, baseProcessedBytes + copied, entryName);
+                lastProgressNanos = System.nanoTime();
+            }
+        }
+        return copied;
+    }
+
     private void writeFolderToZip(CloudFile folder, String prefix, ZipOutputStream zipOutputStream) throws IOException {
         zipOutputStream.putNextEntry(new ZipEntry(prefix));
         zipOutputStream.closeEntry();
@@ -1676,6 +1874,49 @@ public class FileService {
     }
 
     private record DeletePhysicalResult(int deleted, int failures) {
+    }
+
+    private record FolderArchive(Path path, String filename, long sizeBytes) {
+    }
+
+    private record FolderArchivePlan(
+            String rootName,
+            List<ArchiveEntryPlan> entries,
+            int folderCount,
+            int fileCount,
+            long totalBytes) {
+
+        private int totalEntries() {
+            return entries.size();
+        }
+    }
+
+    private record ArchiveRow(
+            Long id,
+            Long parentId,
+            FileKind fileKind,
+            String name,
+            Long objectId,
+            long sizeBytes,
+            String relativePath,
+            String contentType,
+            String objectRelativePath,
+            long objectSizeBytes) {
+    }
+
+    private record ArchiveEntryPlan(
+            String entryName,
+            boolean directory,
+            String relativePath,
+            long sizeBytes) {
+
+        private static ArchiveEntryPlan directory(String entryName) {
+            return new ArchiveEntryPlan(entryName, true, null, 0);
+        }
+
+        private static ArchiveEntryPlan file(String entryName, String relativePath, long sizeBytes) {
+            return new ArchiveEntryPlan(entryName, false, relativePath, sizeBytes);
+        }
     }
 
     private StoredObjectKey storedObjectKey(FileStorageService.StoredObject storedObject) {
