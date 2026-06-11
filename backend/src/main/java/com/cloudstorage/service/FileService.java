@@ -38,6 +38,9 @@ import org.springframework.web.multipart.MultipartFile;
 
 @Service
 public class FileService {
+    private static final int ZIP_ENTRY_LIMIT = 10000;
+    private static final long ZIP_EXTRACTED_SIZE_LIMIT = 3L * 1024 * 1024 * 1024;
+
     private final CloudFileRepository fileRepository;
     private final StorageObjectRepository objectRepository;
     private final UserRepository userRepository;
@@ -271,13 +274,22 @@ public class FileService {
         }
         CloudFile extractRoot = createExtractRoot(user, archive);
         List<FileResponse> extracted = new ArrayList<>();
+        List<FileStorageService.StoredObject> storedObjects = new ArrayList<>();
         try (InputStream inputStream = storageService.resource(archive.getRelativePath()).getInputStream();
                 ZipInputStream zipInputStream = new ZipInputStream(inputStream)) {
             ZipEntry entry;
             int entries = 0;
+            long extractedBytes = 0;
             while ((entry = zipInputStream.getNextEntry()) != null) {
-                if (++entries > 1000) {
+                if (++entries > ZIP_ENTRY_LIMIT) {
                     throw AppException.badRequest("压缩包文件数量超过限制");
+                }
+                long entrySize = entry.getSize();
+                if (!entry.isDirectory() && entrySize > 0) {
+                    extractedBytes += entrySize;
+                    if (extractedBytes > ZIP_EXTRACTED_SIZE_LIMIT) {
+                        throw AppException.badRequest("压缩包解压后体积超过限制");
+                    }
                 }
                 List<String> parts = safeZipParts(entry.getName());
                 if (parts.isEmpty()) {
@@ -290,8 +302,15 @@ public class FileService {
                 } else {
                     String uniqueName = uniqueName(user.getId(), parent.getId(), name);
                     String contentType = URLConnection.guessContentTypeFromName(uniqueName);
-                    FileStorageService.StoredObject stored = storageService.storeStream(
+                    FileStorageService.StoredObject stored = storageService.storeOpenStream(
                             zipInputStream, user.getId(), uniqueName, contentType);
+                    storedObjects.add(stored);
+                    if (entrySize <= 0) {
+                        extractedBytes += stored.size();
+                        if (extractedBytes > ZIP_EXTRACTED_SIZE_LIMIT) {
+                            throw AppException.badRequest("压缩包解压后体积超过限制");
+                        }
+                    }
                     StorageObject object = resolveObject(stored);
                     CloudFile extractedFile = buildFile(attachedUser(user), parent, uniqueName, object);
                     extracted.add(fileMapper.toResponse(fileRepository.save(extractedFile)));
@@ -303,8 +322,10 @@ public class FileService {
             return extracted;
         } catch (Exception ex) {
             if (ex instanceof AppException appException) {
+                cleanupCreatedObjects(storedObjects);
                 throw appException;
             }
+            cleanupCreatedObjects(storedObjects);
             throw AppException.badRequest("解压失败，请确认压缩包未损坏");
         }
     }
@@ -560,6 +581,18 @@ public class FileService {
             parent = ensureFolder(user, parent, part);
         }
         return parent;
+    }
+
+    private void cleanupCreatedObjects(List<FileStorageService.StoredObject> storedObjects) {
+        for (FileStorageService.StoredObject object : storedObjects) {
+            if (object.created()) {
+                try {
+                    storageService.deleteObject(object.relativePath());
+                } catch (AppException ignored) {
+                    // Cleanup is best effort; the original extraction error should stay visible.
+                }
+            }
+        }
     }
 
     private CloudFile ensureFolder(User user, CloudFile parent, String name) {

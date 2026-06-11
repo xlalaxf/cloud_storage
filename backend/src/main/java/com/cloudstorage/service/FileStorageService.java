@@ -49,6 +49,10 @@ public class FileStorageService {
         return prepareObject(inputStream, safeName, contentType);
     }
 
+    public StoredObject storeOpenStream(InputStream inputStream, Long userId, String safeName, String contentType) {
+        return prepareObject(inputStream, safeName, contentType, false);
+    }
+
     public StoredChunk storeUploadChunk(String uploadId, int chunkIndex, InputStream inputStream) {
         Path temp = null;
         try {
@@ -78,14 +82,23 @@ public class FileStorageService {
     }
 
     public StoredObject prepareObject(InputStream inputStream, String safeName, String contentType) {
+        return prepareObject(inputStream, safeName, contentType, true);
+    }
+
+    private StoredObject prepareObject(InputStream inputStream, String safeName, String contentType, boolean closeInputStream) {
         Path temp = null;
         try {
             Files.createDirectories(root.resolve("tmp"));
             temp = Files.createTempFile(root.resolve("tmp"), "upload-", ".tmp");
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             long size;
-            try (DigestInputStream digestInputStream = new DigestInputStream(inputStream, digest)) {
+            DigestInputStream digestInputStream = new DigestInputStream(inputStream, digest);
+            try {
                 size = Files.copy(digestInputStream, temp, StandardCopyOption.REPLACE_EXISTING);
+            } finally {
+                if (closeInputStream) {
+                    digestInputStream.close();
+                }
             }
             String sha256 = hex(digest.digest());
             String extension = extensionOf(safeName);

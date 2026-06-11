@@ -1277,7 +1277,7 @@ export function useCloudStorageApp() {
     if (!selected.value) return
     busy.value = true
     try {
-      await request(`/files/${selected.value.id}/extract`, { method: 'POST' })
+      await request(`/files/${selected.value.id}/extract`, { method: 'POST', timeoutMs: 0 })
       notify('解压完成', 'success')
       await loadFiles()
     } catch (error) {
@@ -1369,6 +1369,16 @@ export function useCloudStorageApp() {
       || contentType.startsWith('video/')
       || MEDIA_AUDIO_EXTENSIONS.has(extension)
       || MEDIA_VIDEO_EXTENSIONS.has(extension)
+  }
+
+  function isZipFile(file) {
+    if (!file || file.fileKind !== 'FILE') return false
+    const contentType = (file.contentType || '').toLowerCase()
+    const extension = (file.extension || '').toLowerCase()
+    return extension === 'zip'
+      || file.name?.toLowerCase().endsWith('.zip')
+      || contentType === 'application/zip'
+      || contentType === 'application/x-zip-compressed'
   }
   
   function formatSpeed(bytesPerSecond) {
@@ -1975,6 +1985,7 @@ export function useCloudStorageApp() {
     formatDuration,
     formatEta,
     isMediaFile,
+    isZipFile,
     formatSpeed,
     formatDate,
     formatBanUntil,

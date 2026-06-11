@@ -44,6 +44,7 @@ const {
   openMoveDialog,
   openPreview,
   openShareDialog,
+  isZipFile,
   partialVisibleSelected,
   pauseUpload,
   renameSelected,
@@ -169,7 +170,7 @@ const {
         <button @click="openMoveDialog('copy')"><Copy :size="17" />复制</button>
         <button v-if="selected.fileKind === 'FILE'" @click="createDirectLink"><ExternalLink :size="17" />直链</button>
         <button @click="openShareDialog"><Share2 :size="17" />分享</button>
-        <button v-if="selected.extension === 'zip'" @click="extractSelected"><Archive :size="17" />解压</button>
+        <button v-if="isZipFile(selected)" @click="extractSelected"><Archive :size="17" />解压</button>
         <button class="danger" @click="deleteSelected"><Trash2 :size="17" />删除</button>
       </div>
     </template>
