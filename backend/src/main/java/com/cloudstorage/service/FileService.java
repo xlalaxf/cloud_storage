@@ -69,6 +69,8 @@ public class FileService {
     private static final long ZIP_EXTRACTED_SIZE_LIMIT = 3L * 1024 * 1024 * 1024;
     private static final int ZIP_EXTRACT_WORKERS = Math.max(2, Math.min(8, Runtime.getRuntime().availableProcessors()));
     private static final int DB_LOOKUP_BATCH_SIZE = 500;
+    private static final int DELETE_BATCH_SIZE = 2000;
+    private static final int DELETE_PHYSICAL_WORKERS = Math.max(2, Math.min(8, Runtime.getRuntime().availableProcessors()));
     private static final int EXTRACT_PERSIST_ATTEMPTS = 3;
 
     private final CloudFileRepository fileRepository;
@@ -555,15 +557,263 @@ public class FileService {
         if (file.isDeleted()) {
             return;
         }
-        file.setDeleted(true);
         if (file.getFileKind() == FileKind.FOLDER) {
-            List<CloudFile> children = fileRepository.findByParentIdAndDeletedFalseOrderByFileKindDescNameAsc(file.getId());
-            children.forEach(this::deleteRecursive);
-        } else {
-            StorageObject object = file.getObject();
-            file.setObject(null);
-            releaseObject(object);
+            deleteFolderTree(file);
+            return;
         }
+        file.setDeleted(true);
+        StorageObject object = file.getObject();
+        file.setObject(null);
+        releaseObject(object);
+    }
+
+    private void deleteFolderTree(CloudFile root) {
+        Long ownerId = root.getOwner().getId();
+        long totalStartedNanos = System.nanoTime();
+        long scanStartedNanos = System.nanoTime();
+        DeleteSubtree subtree = loadDeleteSubtree(root.getId(), ownerId);
+        long scanElapsedMs = elapsedMs(scanStartedNanos);
+        if (subtree.fileIds().isEmpty()) {
+            return;
+        }
+
+        log.info(
+                "Delete subtree scanned rootId={} ownerId={} folders={} files={} fileRows={} objects={} elapsedMs={}",
+                root.getId(),
+                ownerId,
+                subtree.folderCount(),
+                subtree.fileCount(),
+                subtree.fileIds().size(),
+                subtree.objectRefCounts().size(),
+                scanElapsedMs);
+
+        long markStartedNanos = System.nanoTime();
+        int markedRows = markFilesDeleted(subtree.fileIds());
+        long markElapsedMs = elapsedMs(markStartedNanos);
+
+        long refsStartedNanos = System.nanoTime();
+        decrementStorageObjectRefs(subtree.objectRefCounts());
+        long refsElapsedMs = elapsedMs(refsStartedNanos);
+
+        long objectStartedNanos = System.nanoTime();
+        List<DeletedStorageObject> zeroObjects = loadZeroRefStorageObjects(subtree.objectRefCounts().keySet());
+        int detachedRows = detachStorageObjects(zeroObjects);
+        int deletedObjects = deleteStorageObjectRows(zeroObjects);
+        Set<String> physicalDeletePaths = removablePhysicalPaths(zeroObjects);
+        long objectElapsedMs = elapsedMs(objectStartedNanos);
+
+        long physicalStartedNanos = System.nanoTime();
+        DeletePhysicalResult physicalResult = deletePhysicalObjects(physicalDeletePaths);
+        long physicalElapsedMs = elapsedMs(physicalStartedNanos);
+
+        log.info(
+                "Delete subtree done rootId={} ownerId={} markedRows={} decrementedObjects={} zeroObjects={} detachedRows={} deletedObjects={} physicalPaths={} physicalFailures={} scanMs={} markMs={} refsMs={} objectsMs={} physicalMs={} totalMs={}",
+                root.getId(),
+                ownerId,
+                markedRows,
+                subtree.objectRefCounts().size(),
+                zeroObjects.size(),
+                detachedRows,
+                deletedObjects,
+                physicalResult.deleted(),
+                physicalResult.failures(),
+                scanElapsedMs,
+                markElapsedMs,
+                refsElapsedMs,
+                objectElapsedMs,
+                physicalElapsedMs,
+                elapsedMs(totalStartedNanos));
+    }
+
+    private DeleteSubtree loadDeleteSubtree(Long rootId, Long ownerId) {
+        List<DeleteSubtreeRow> rows = jdbcTemplate.query(
+                """
+                        with recursive subtree as (
+                            select id, file_kind, object_id
+                            from files
+                            where id = ? and owner_id = ? and deleted = false
+                            union all
+                            select child.id, child.file_kind, child.object_id
+                            from files child
+                            join subtree parent on child.parent_id = parent.id
+                            where child.owner_id = ? and child.deleted = false
+                        )
+                        select id, file_kind, object_id from subtree
+                        """,
+                (resultSet, rowNum) -> new DeleteSubtreeRow(
+                        resultSet.getLong("id"),
+                        FileKind.valueOf(resultSet.getString("file_kind")),
+                        resultSet.getObject("object_id", Long.class)),
+                rootId,
+                ownerId,
+                ownerId);
+
+        List<Long> fileIds = new ArrayList<>(rows.size());
+        Map<Long, Integer> objectRefCounts = new HashMap<>();
+        int folderCount = 0;
+        int fileCount = 0;
+        for (DeleteSubtreeRow row : rows) {
+            fileIds.add(row.id());
+            if (row.fileKind() == FileKind.FOLDER) {
+                folderCount++;
+                continue;
+            }
+            fileCount++;
+            if (row.objectId() != null) {
+                objectRefCounts.merge(row.objectId(), 1, Integer::sum);
+            }
+        }
+        return new DeleteSubtree(fileIds, objectRefCounts, folderCount, fileCount);
+    }
+
+    private int markFilesDeleted(Collection<Long> fileIds) {
+        int updated = 0;
+        for (List<Long> batch : batches(fileIds, DELETE_BATCH_SIZE)) {
+            List<Object> args = new ArrayList<>(batch.size() + 1);
+            args.add(Timestamp.from(Instant.now()));
+            args.addAll(batch);
+            updated += jdbcTemplate.update(
+                    "update files set deleted = true, object_id = null, updated_at = ? where id in ("
+                            + placeholders(batch.size()) + ")",
+                    args.toArray());
+        }
+        return updated;
+    }
+
+    private void decrementStorageObjectRefs(Map<Long, Integer> objectRefCounts) {
+        if (objectRefCounts.isEmpty()) {
+            return;
+        }
+        List<Map.Entry<Long, Integer>> entries = new ArrayList<>(objectRefCounts.entrySet());
+        for (List<Map.Entry<Long, Integer>> batch : batches(entries, DELETE_BATCH_SIZE)) {
+            List<Object> args = new ArrayList<>(batch.size() * 3 + 1);
+            StringBuilder sql = new StringBuilder(
+                    "update storage_objects set ref_count = greatest(0, ref_count - case id ");
+            for (Map.Entry<Long, Integer> entry : batch) {
+                sql.append("when ? then ? ");
+                args.add(entry.getKey());
+                args.add(entry.getValue());
+            }
+            sql.append("else 0 end), updated_at = ? where id in (");
+            args.add(Timestamp.from(Instant.now()));
+            for (int index = 0; index < batch.size(); index++) {
+                if (index > 0) {
+                    sql.append(',');
+                }
+                sql.append('?');
+                args.add(batch.get(index).getKey());
+            }
+            sql.append(')');
+            jdbcTemplate.update(sql.toString(), args.toArray());
+        }
+    }
+
+    private List<DeletedStorageObject> loadZeroRefStorageObjects(Collection<Long> objectIds) {
+        if (objectIds.isEmpty()) {
+            return List.of();
+        }
+        List<DeletedStorageObject> zeroObjects = new ArrayList<>();
+        for (List<Long> batch : batches(objectIds, DELETE_BATCH_SIZE)) {
+            zeroObjects.addAll(jdbcTemplate.query(
+                    "select id, relative_path from storage_objects where ref_count <= 0 and id in ("
+                            + placeholders(batch.size()) + ")",
+                    (resultSet, rowNum) -> new DeletedStorageObject(
+                            resultSet.getLong("id"),
+                            resultSet.getString("relative_path")),
+                    batch.toArray()));
+        }
+        return zeroObjects;
+    }
+
+    private Set<String> removablePhysicalPaths(List<DeletedStorageObject> zeroObjects) {
+        Set<String> zeroPaths = zeroObjects.stream()
+                .map(DeletedStorageObject::relativePath)
+                .filter(path -> path != null && !path.isBlank())
+                .collect(Collectors.toSet());
+        if (zeroPaths.isEmpty()) {
+            return Set.of();
+        }
+        Set<String> retainedPaths = new HashSet<>();
+        for (List<String> pathBatch : batches(zeroPaths, DELETE_BATCH_SIZE)) {
+            retainedPaths.addAll(jdbcTemplate.queryForList(
+                    "select distinct relative_path from storage_objects where relative_path in ("
+                            + placeholders(pathBatch.size()) + ")",
+                    String.class,
+                    pathBatch.toArray()));
+        }
+        zeroPaths.removeAll(retainedPaths);
+        return zeroPaths;
+    }
+
+    private int detachStorageObjects(List<DeletedStorageObject> zeroObjects) {
+        Set<Long> objectIds = zeroObjects.stream()
+                .map(DeletedStorageObject::id)
+                .collect(Collectors.toSet());
+        if (objectIds.isEmpty()) {
+            return 0;
+        }
+        int updated = 0;
+        for (List<Long> batch : batches(objectIds, DELETE_BATCH_SIZE)) {
+            updated += jdbcTemplate.update(
+                    "update files set object_id = null, updated_at = ? where object_id in ("
+                            + placeholders(batch.size()) + ")",
+                    withLeadingTimestamp(batch));
+        }
+        return updated;
+    }
+
+    private int deleteStorageObjectRows(List<DeletedStorageObject> zeroObjects) {
+        Set<Long> objectIds = zeroObjects.stream()
+                .map(DeletedStorageObject::id)
+                .collect(Collectors.toSet());
+        if (objectIds.isEmpty()) {
+            return 0;
+        }
+        int deleted = 0;
+        for (List<Long> batch : batches(objectIds, DELETE_BATCH_SIZE)) {
+            deleted += jdbcTemplate.update(
+                    "delete from storage_objects where id in (" + placeholders(batch.size()) + ")",
+                    batch.toArray());
+        }
+        return deleted;
+    }
+
+    private DeletePhysicalResult deletePhysicalObjects(Set<String> relativePaths) {
+        if (relativePaths.isEmpty()) {
+            return new DeletePhysicalResult(0, 0);
+        }
+        AtomicInteger deleted = new AtomicInteger();
+        AtomicInteger failures = new AtomicInteger();
+        int workers = Math.min(DELETE_PHYSICAL_WORKERS, relativePaths.size());
+        ExecutorService executor = Executors.newFixedThreadPool(workers, namedThreadFactory("delete-object-"));
+        try {
+            List<Future<?>> futures = new ArrayList<>(relativePaths.size());
+            for (String relativePath : relativePaths) {
+                futures.add(executor.submit(() -> {
+                    try {
+                        storageService.deleteObject(relativePath);
+                        deleted.incrementAndGet();
+                    } catch (AppException ex) {
+                        failures.incrementAndGet();
+                        log.warn("Delete physical object failed relativePath={} message={}", relativePath, ex.getMessage());
+                    }
+                }));
+            }
+            for (Future<?> future : futures) {
+                try {
+                    future.get();
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                    failures.incrementAndGet();
+                    break;
+                } catch (ExecutionException ex) {
+                    failures.incrementAndGet();
+                }
+            }
+        } finally {
+            executor.shutdownNow();
+        }
+        return new DeletePhysicalResult(deleted.get(), failures.get());
     }
 
     private StorageObject resolveObject(FileStorageService.StoredObject stored) {
@@ -1347,6 +1597,17 @@ public class FileService {
         return batches;
     }
 
+    private String placeholders(int count) {
+        return String.join(",", java.util.Collections.nCopies(count, "?"));
+    }
+
+    private Object[] withLeadingTimestamp(Collection<Long> values) {
+        List<Object> args = new ArrayList<>(values.size() + 1);
+        args.add(Timestamp.from(Instant.now()));
+        args.addAll(values);
+        return args.toArray();
+    }
+
     private long elapsedMs(long startedNanos) {
         return Duration.ofNanos(System.nanoTime() - startedNanos).toMillis();
     }
@@ -1389,6 +1650,22 @@ public class FileService {
     }
 
     private record ExtractedFileInsert(String name, Long parentId, StorageObject object) {
+    }
+
+    private record DeleteSubtree(
+            List<Long> fileIds,
+            Map<Long, Integer> objectRefCounts,
+            int folderCount,
+            int fileCount) {
+    }
+
+    private record DeleteSubtreeRow(Long id, FileKind fileKind, Long objectId) {
+    }
+
+    private record DeletedStorageObject(Long id, String relativePath) {
+    }
+
+    private record DeletePhysicalResult(int deleted, int failures) {
     }
 
     private StoredObjectKey storedObjectKey(FileStorageService.StoredObject storedObject) {
