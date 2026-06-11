@@ -14,6 +14,7 @@ export function useCloudStorageApp() {
   const dragActive = ref(false)
   const fileInput = ref(null)
   const avatarInput = ref(null)
+  const avatarCropCanvas = ref(null)
   const avatarUrl = ref('')
   const avatarBusy = ref(false)
   const selected = ref(null)
@@ -52,6 +53,19 @@ export function useCloudStorageApp() {
   const dialog = reactive({ open: false, type: '', title: '', value: '', targetParentId: null, folderTree: [], expandedFolderIds: new Set(), loadingFolders: false })
   const banDialog = reactive({ open: false, user: null, reason: '', bannedUntil: '' })
   const confirmDialog = reactive({ open: false, title: '', message: '', confirmText: '确定', danger: false, resolve: null })
+  const avatarEditor = reactive({
+    open: false,
+    fileName: '',
+    previewUrl: '',
+    naturalWidth: 0,
+    naturalHeight: 0,
+    scale: 1,
+    minScale: 1,
+    maxScale: 1,
+    offsetX: 0,
+    offsetY: 0,
+    dragging: false,
+  })
   
   const authForm = reactive({
     username: '',
@@ -119,6 +133,7 @@ export function useCloudStorageApp() {
   const MAX_AVATAR_SOURCE_BYTES = 10 * 1024 * 1024
   const MAX_AVATAR_STORED_BYTES = 100 * 1024
   const AVATAR_MAX_SIDE = 512
+  const AVATAR_EDITOR_SIZE = 320
   const MEDIA_AUDIO_EXTENSIONS = new Set(['mp3', 'wav', 'flac', 'aac', 'm4a', 'ogg', 'opus', 'wma'])
   const MEDIA_VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'mkv', 'avi', 'm4v', 'wmv'])
   const CHUNK_UPLOAD_SIZE = 32 * 1024 * 1024
@@ -145,6 +160,14 @@ export function useCloudStorageApp() {
     startingFileIds: new Set(),
     pendingQueue: [],
     downloadingJobIds: new Set(),
+  }
+  let avatarEditorImage = null
+  const avatarEditorDrag = {
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    originX: 0,
+    originY: 0,
   }
   
   const admin = reactive({
@@ -373,6 +396,7 @@ export function useCloudStorageApp() {
     token.value = ''
     currentUser.value = null
     clearAvatarUrl()
+    closeAvatarEditor()
     files.value = []
     selected.value = null
     selectedIds.value = new Set()
@@ -426,19 +450,160 @@ export function useCloudStorageApp() {
       event.target.value = ''
       return
     }
+    try {
+      await openAvatarEditor(file)
+    } catch (error) {
+      fail(error)
+    } finally {
+      event.target.value = ''
+    }
+  }
+
+  async function openAvatarEditor(file) {
+    if (!file.type.startsWith('image/')) {
+      throw new Error('请选择图片文件')
+    }
+    if (file.size > MAX_AVATAR_SOURCE_BYTES) {
+      throw new Error('头像不能超过 10MB')
+    }
+
+    closeAvatarEditor()
+    const { image, url } = await loadImage(file)
+    avatarEditorImage = image
+    avatarEditor.fileName = file.name || 'avatar'
+    avatarEditor.previewUrl = url
+    avatarEditor.naturalWidth = image.naturalWidth
+    avatarEditor.naturalHeight = image.naturalHeight
+    avatarEditor.minScale = AVATAR_EDITOR_SIZE / Math.min(image.naturalWidth, image.naturalHeight)
+    avatarEditor.maxScale = Math.max(avatarEditor.minScale * 4, avatarEditor.minScale + 0.01)
+    avatarEditor.scale = Math.min(avatarEditor.maxScale, Math.max(avatarEditor.minScale, AVATAR_EDITOR_SIZE / Math.max(image.naturalWidth, image.naturalHeight)))
+    avatarEditor.offsetX = 0
+    avatarEditor.offsetY = 0
+    avatarEditor.dragging = false
+    avatarEditor.open = true
+    await nextTick()
+    constrainAvatarEditor()
+    drawAvatarEditor()
+  }
+
+  function closeAvatarEditor() {
+    if (avatarEditor.previewUrl) {
+      URL.revokeObjectURL(avatarEditor.previewUrl)
+    }
+    avatarEditor.open = false
+    avatarEditor.fileName = ''
+    avatarEditor.previewUrl = ''
+    avatarEditor.naturalWidth = 0
+    avatarEditor.naturalHeight = 0
+    avatarEditor.scale = 1
+    avatarEditor.minScale = 1
+    avatarEditor.maxScale = 1
+    avatarEditor.offsetX = 0
+    avatarEditor.offsetY = 0
+    avatarEditor.dragging = false
+    avatarEditorImage = null
+    avatarEditorDrag.pointerId = null
+  }
+
+  function drawAvatarEditor() {
+    const canvas = avatarCropCanvas.value
+    if (!canvas || !avatarEditorImage) return
+    const context = canvas.getContext('2d')
+    if (!context) return
+    const displaySize = AVATAR_EDITOR_SIZE
+    canvas.width = displaySize
+    canvas.height = displaySize
+    context.clearRect(0, 0, displaySize, displaySize)
+    context.fillStyle = '#f2f5f8'
+    context.fillRect(0, 0, displaySize, displaySize)
+    const width = avatarEditor.naturalWidth * avatarEditor.scale
+    const height = avatarEditor.naturalHeight * avatarEditor.scale
+    const x = (displaySize - width) / 2 + avatarEditor.offsetX
+    const y = (displaySize - height) / 2 + avatarEditor.offsetY
+    context.imageSmoothingEnabled = true
+    context.imageSmoothingQuality = 'high'
+    context.drawImage(avatarEditorImage, x, y, width, height)
+  }
+
+  function constrainAvatarEditor() {
+    const width = avatarEditor.naturalWidth * avatarEditor.scale
+    const height = avatarEditor.naturalHeight * avatarEditor.scale
+    const maxX = Math.max(0, (width - AVATAR_EDITOR_SIZE) / 2)
+    const maxY = Math.max(0, (height - AVATAR_EDITOR_SIZE) / 2)
+    avatarEditor.offsetX = clamp(avatarEditor.offsetX, -maxX, maxX)
+    avatarEditor.offsetY = clamp(avatarEditor.offsetY, -maxY, maxY)
+  }
+
+  function updateAvatarScale(value) {
+    const previousScale = avatarEditor.scale || avatarEditor.minScale
+    const nextScale = clamp(Number(value) || avatarEditor.minScale, avatarEditor.minScale, avatarEditor.maxScale)
+    if (Math.abs(nextScale - previousScale) < 0.0001) return
+    avatarEditor.offsetX *= nextScale / previousScale
+    avatarEditor.offsetY *= nextScale / previousScale
+    avatarEditor.scale = nextScale
+    constrainAvatarEditor()
+    drawAvatarEditor()
+  }
+
+  function zoomAvatarEditor(step) {
+    updateAvatarScale(avatarEditor.scale + step)
+  }
+
+  function startAvatarDrag(event) {
+    if (!avatarEditor.open || avatarBusy.value) return
+    avatarEditor.dragging = true
+    avatarEditorDrag.pointerId = event.pointerId
+    avatarEditorDrag.startX = event.clientX
+    avatarEditorDrag.startY = event.clientY
+    avatarEditorDrag.originX = avatarEditor.offsetX
+    avatarEditorDrag.originY = avatarEditor.offsetY
+    try {
+      event.currentTarget?.setPointerCapture?.(event.pointerId)
+    } catch {
+      // Synthetic pointer events do not always have an active pointer capture target.
+    }
+  }
+
+  function moveAvatarDrag(event) {
+    if (!avatarEditor.dragging || avatarEditorDrag.pointerId !== event.pointerId) return
+    avatarEditor.offsetX = avatarEditorDrag.originX + event.clientX - avatarEditorDrag.startX
+    avatarEditor.offsetY = avatarEditorDrag.originY + event.clientY - avatarEditorDrag.startY
+    constrainAvatarEditor()
+    drawAvatarEditor()
+  }
+
+  function endAvatarDrag(event) {
+    if (avatarEditorDrag.pointerId !== event.pointerId) return
+    avatarEditor.dragging = false
+    avatarEditorDrag.pointerId = null
+    try {
+      event.currentTarget?.releasePointerCapture?.(event.pointerId)
+    } catch {
+      // Pointer capture may already be released by the browser.
+    }
+  }
+
+  function wheelAvatarEditor(event) {
+    if (!avatarEditor.open || avatarBusy.value) return
+    event.preventDefault()
+    zoomAvatarEditor(event.deltaY < 0 ? 0.08 : -0.08)
+  }
+
+  async function submitAvatarEditor() {
+    if (!avatarEditor.open || avatarBusy.value) return
     avatarBusy.value = true
     try {
-      const compressed = await compressAvatar(file)
+      const compressed = await compressAvatarCanvas()
       const form = new FormData()
       form.append('avatar', compressed, compressed.name)
       currentUser.value = await uploadRequest('/users/me/avatar', form, { timeoutMs: 60000 })
       await refreshAvatar(currentUser.value)
+      closeAvatarEditor()
       notify('头像已更新', 'success')
     } catch (error) {
       fail(error)
     } finally {
       avatarBusy.value = false
-      event.target.value = ''
     }
   }
 
@@ -506,6 +671,43 @@ export function useCloudStorageApp() {
       URL.revokeObjectURL(url)
     }
   }
+
+  async function compressAvatarCanvas() {
+    const sourceCanvas = avatarCropCanvas.value
+    if (!sourceCanvas) {
+      throw new Error('当前浏览器不支持头像裁剪')
+    }
+
+    const canvas = document.createElement('canvas')
+    const context = canvas.getContext('2d')
+    if (!context) throw new Error('当前浏览器不支持头像压缩')
+
+    let side = AVATAR_MAX_SIDE
+    let quality = 0.86
+    let blob = null
+    for (let attempt = 0; attempt < 18; attempt += 1) {
+      canvas.width = side
+      canvas.height = side
+      context.clearRect(0, 0, side, side)
+      context.fillStyle = '#ffffff'
+      context.fillRect(0, 0, side, side)
+      context.imageSmoothingEnabled = true
+      context.imageSmoothingQuality = 'high'
+      context.drawImage(sourceCanvas, 0, 0, sourceCanvas.width, sourceCanvas.height, 0, 0, side, side)
+      blob = await canvasToBlob(canvas, 'image/jpeg', quality)
+      if (blob.size <= MAX_AVATAR_STORED_BYTES) break
+      if (quality > 0.5) {
+        quality = Math.max(0.5, quality - 0.08)
+      } else {
+        side = Math.max(96, Math.round(side * 0.82))
+      }
+    }
+
+    if (!blob || blob.size > MAX_AVATAR_STORED_BYTES) {
+      throw new Error('头像压缩后仍超过 100KB，请更换图片')
+    }
+    return new File([blob], `avatar-${Date.now()}.jpg`, { type: 'image/jpeg' })
+  }
   
   function loadImage(file) {
     return new Promise((resolve, reject) => {
@@ -530,6 +732,10 @@ export function useCloudStorageApp() {
         }
       }, type, quality)
     })
+  }
+
+  function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, value))
   }
   
   async function loadFiles(parentId = currentParentId.value) {
@@ -2092,6 +2298,7 @@ export function useCloudStorageApp() {
   
   onBeforeUnmount(() => {
     clearAvatarUrl()
+    closeAvatarEditor()
     window.clearTimeout(extractControl.polling)
     window.clearTimeout(archiveControl.polling)
   })
@@ -2108,6 +2315,7 @@ export function useCloudStorageApp() {
     dragActive,
     fileInput,
     avatarInput,
+    avatarCropCanvas,
     avatarUrl,
     avatarBusy,
     selected,
@@ -2125,6 +2333,7 @@ export function useCloudStorageApp() {
     dialog,
     banDialog,
     confirmDialog,
+    avatarEditor,
     authForm,
     profileForm,
     uploadProgress,
@@ -2133,6 +2342,7 @@ export function useCloudStorageApp() {
     MAX_AVATAR_SOURCE_BYTES,
     MAX_AVATAR_STORED_BYTES,
     AVATAR_MAX_SIDE,
+    AVATAR_EDITOR_SIZE,
     admin,
     shareRouteToken,
     shareState,
@@ -2169,8 +2379,17 @@ export function useCloudStorageApp() {
     refreshAvatar,
     saveProfile,
     uploadAvatarSelected,
+    closeAvatarEditor,
+    updateAvatarScale,
+    zoomAvatarEditor,
+    startAvatarDrag,
+    moveAvatarDrag,
+    endAvatarDrag,
+    wheelAvatarEditor,
+    submitAvatarEditor,
     clearAvatar,
     compressAvatar,
+    compressAvatarCanvas,
     loadImage,
     canvasToBlob,
     loadFiles,

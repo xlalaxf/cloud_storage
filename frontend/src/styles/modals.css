@@ -22,6 +22,91 @@
   width: min(720px, calc(100vw - 40px));
 }
 
+.avatar-editor-modal {
+  width: min(100%, 480px);
+}
+
+.avatar-editor-modal header {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 14px;
+}
+
+.avatar-editor-modal header h2 {
+  margin: 0;
+}
+
+.avatar-editor-modal header span {
+  min-width: 0;
+  overflow: hidden;
+  color: #6b7888;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.avatar-cropper {
+  position: relative;
+  width: min(320px, calc(100vw - 80px));
+  aspect-ratio: 1;
+  margin: 0 auto;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #f2f5f8;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.avatar-cropper.dragging {
+  cursor: grabbing;
+}
+
+.avatar-cropper canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.avatar-crop-frame {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border: 2px solid rgba(255, 255, 255, 0.95);
+  border-radius: 8px;
+  box-shadow:
+    inset 0 0 0 1px rgba(29, 36, 51, 0.18),
+    inset 0 0 0 999px rgba(29, 36, 51, 0.08);
+}
+
+.avatar-zoom-control {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) 38px;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.avatar-zoom-control button {
+  display: inline-grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  color: #287c6b;
+  background: #edf7f4;
+}
+
+.avatar-zoom-control button:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.avatar-zoom-control input[type="range"] {
+  width: 100%;
+  accent-color: #287c6b;
+}
+
 .folder-picker-current {
   display: flex;
   align-items: center;

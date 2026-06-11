@@ -1,11 +1,15 @@
 <script setup>
-import { Folder, Info } from '@lucide/vue'
+import { Folder, Info, Minus, Plus } from '@lucide/vue'
 import { useCloudStorageContext } from '../composables/appContext'
 import FolderTreeNode from '../components/FolderTreeNode.vue'
 
 const {
+  avatarBusy,
+  avatarCropCanvas,
+  avatarEditor,
   banDialog,
   busy,
+  closeAvatarEditor,
   closeFileInfo,
   closeConfirmDialog,
   closePreview,
@@ -16,12 +20,19 @@ const {
   formatSize,
   isMediaFile,
   isFolderTargetDisabled,
+  endAvatarDrag,
+  moveAvatarDrag,
   preview,
   selectFolderTarget,
   selectedTargetPath,
+  startAvatarDrag,
   submitBan,
+  submitAvatarEditor,
   submitDialog,
   toggleFolderNode,
+  updateAvatarScale,
+  wheelAvatarEditor,
+  zoomAvatarEditor,
 } = useCloudStorageContext()
 </script>
 
@@ -76,6 +87,53 @@ const {
         <button class="primary" :disabled="busy">确定</button>
       </div>
     </form>
+  </div>
+</Transition>
+
+<Transition name="modal-fade">
+  <div v-if="avatarEditor.open" class="modal-backdrop" @click.self="!avatarBusy && closeAvatarEditor()">
+    <section class="modal avatar-editor-modal">
+      <header>
+        <h2>调整头像</h2>
+        <span>{{ avatarEditor.fileName }}</span>
+      </header>
+      <div
+        class="avatar-cropper"
+        :class="{ dragging: avatarEditor.dragging }"
+        @pointerdown="startAvatarDrag"
+        @pointermove="moveAvatarDrag"
+        @pointerup="endAvatarDrag"
+        @pointercancel="endAvatarDrag"
+        @wheel="wheelAvatarEditor"
+      >
+        <canvas ref="avatarCropCanvas" width="320" height="320"></canvas>
+        <div class="avatar-crop-frame" aria-hidden="true"></div>
+      </div>
+      <div class="avatar-zoom-control">
+        <button type="button" title="缩小" :disabled="avatarBusy" @click="zoomAvatarEditor(-0.08)">
+          <Minus :size="17" />
+        </button>
+        <input
+          type="range"
+          :min="avatarEditor.minScale"
+          :max="avatarEditor.maxScale"
+          :step="0.01"
+          :value="avatarEditor.scale"
+          :disabled="avatarBusy"
+          aria-label="头像缩放"
+          @input="updateAvatarScale($event.target.value)"
+        />
+        <button type="button" title="放大" :disabled="avatarBusy" @click="zoomAvatarEditor(0.08)">
+          <Plus :size="17" />
+        </button>
+      </div>
+      <div class="modal-actions">
+        <button type="button" :disabled="avatarBusy" @click="closeAvatarEditor">取消</button>
+        <button type="button" class="primary" :disabled="avatarBusy" @click="submitAvatarEditor">
+          {{ avatarBusy ? '上传中' : '保存头像' }}
+        </button>
+      </div>
+    </section>
   </div>
 </Transition>
 
