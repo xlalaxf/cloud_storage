@@ -170,7 +170,7 @@ const {
       <h2>已选择 {{ selectedFiles.length }} 个项目</h2>
       <p>{{ selectedFileItems.length }} 个文件 · {{ selectedFolderItems.length }} 个文件夹</p>
       <div class="action-grid">
-        <button :disabled="!selectedFileItems.length || busy" @click="downloadSelectedFiles"><Download :size="17" />下载文件</button>
+        <button :disabled="!selectedFiles.length || busy" @click="downloadSelectedFiles"><Download :size="17" />下载选中</button>
         <button :disabled="busy" @click="openMoveDialog('move')"><MoveRight :size="17" />移动到</button>
         <button :disabled="busy" @click="openMoveDialog('copy')"><Copy :size="17" />复制到</button>
         <button @click="clearSelection"><RefreshCw :size="17" />取消选择</button>
@@ -184,7 +184,7 @@ const {
       <div class="action-grid">
         <button class="secondary-action" @click="openFileInfo(selected)"><Info :size="17" />详情</button>
         <button @click="openPreview(selected)"><Eye :size="17" />预览</button>
-        <button v-if="selected.fileKind === 'FILE'" @click="downloadFile(selected)"><Download :size="17" />下载</button>
+        <button @click="downloadFile(selected)"><Download :size="17" />下载</button>
         <button @click="renameSelected"><Pencil :size="17" />重命名</button>
         <button @click="openMoveDialog('move')"><MoveRight :size="17" />移动</button>
         <button @click="openMoveDialog('copy')"><Copy :size="17" />复制</button>

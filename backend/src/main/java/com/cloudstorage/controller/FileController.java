@@ -77,7 +77,7 @@ public class FileController {
 
     @GetMapping("/{id}/download")
     public ResponseEntity<?> download(@AuthenticationPrincipal User user, @PathVariable Long id) {
-        return binary(fileService.downloadOwned(user, id, true), true);
+        return binary(fileService.downloadItemOwned(user, id), true);
     }
 
     @GetMapping("/{id}/preview")

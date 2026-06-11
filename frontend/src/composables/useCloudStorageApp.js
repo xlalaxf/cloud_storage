@@ -1085,7 +1085,7 @@ export function useCloudStorageApp() {
   
   async function downloadFile(file) {
     try {
-      await downloadBlob(`/files/${file.id}/download`, file.name)
+      await downloadBlob(`/files/${file.id}/download`, downloadName(file))
       file.downloadCount += 1
     } catch (error) {
       fail(error)
@@ -1229,11 +1229,11 @@ export function useCloudStorageApp() {
   }
   
   async function downloadSelectedFiles() {
-    if (!selectedFileItems.value.length) return
+    if (!selectedFiles.value.length) return
     busy.value = true
     try {
-      for (const file of selectedFileItems.value) {
-        await downloadBlob(`/files/${file.id}/download`, file.name)
+      for (const file of selectedFiles.value) {
+        await downloadBlob(`/files/${file.id}/download`, downloadName(file))
       }
       await loadFiles()
     } catch (error) {
@@ -1913,6 +1913,10 @@ export function useCloudStorageApp() {
   }
 
   function shareDownloadName(file) {
+    return downloadName(file)
+  }
+
+  function downloadName(file) {
     if (file.fileKind !== 'FOLDER') {
       return file.name
     }

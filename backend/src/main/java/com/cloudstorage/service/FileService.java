@@ -261,6 +261,16 @@ public class FileService {
     }
 
     @Transactional
+    public DownloadPayload downloadItemOwned(User user, Long fileId) {
+        CloudFile file = requireOwned(user, fileId);
+        DownloadPayload payload = file.getFileKind() == FileKind.FOLDER
+                ? downloadFolder(file, true)
+                : download(file, true);
+        auditService.recordFileOperation(user, file, "DOWNLOAD", null);
+        return payload;
+    }
+
+    @Transactional
     public DownloadPayload download(CloudFile file, boolean increaseCount) {
         if (file.isDeleted() || file.getFileKind() != FileKind.FILE) {
             throw AppException.notFound("文件不存在");
