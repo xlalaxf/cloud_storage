@@ -100,9 +100,29 @@ const {
     </div>
 
     <div class="maintenance-panel">
-      <div>
-        <strong>清理过期临时文件</strong>
-        <span>删除过期上传分片，以及超过 1 小时的上传合并临时文件。正式文件不会被删除。</span>
+      <div class="maintenance-main">
+        <div>
+          <strong>清理过期临时文件</strong>
+          <span>删除过期上传分片，以及超过 1 小时的上传合并临时文件。正式文件不会被删除。</span>
+        </div>
+        <div v-if="storageCleanup.result" class="cleanup-summary">
+          <div>
+            <strong>{{ formatSize(storageCleanup.result.releasedBytes || 0) }}</strong>
+            <span>释放空间</span>
+          </div>
+          <div>
+            <strong>{{ storageCleanup.result.expiredUploadSessions || 0 }}</strong>
+            <span>过期上传任务</span>
+          </div>
+          <div>
+            <strong>{{ storageCleanup.result.deletedTemporaryFiles || 0 }}</strong>
+            <span>临时文件</span>
+          </div>
+          <div>
+            <strong>{{ storageCleanup.result.failedTemporaryFiles || 0 }}</strong>
+            <span>失败文件</span>
+          </div>
+        </div>
       </div>
       <button class="text-button danger-text" :disabled="busy || storageCleanup.running" @click="cleanupExpiredStorage">
         <Trash2 :size="16" />{{ storageCleanup.running ? '清理中' : '开始清理' }}
@@ -110,51 +130,33 @@ const {
     </div>
 
     <div class="maintenance-panel">
-      <div>
-        <strong>清理孤立本地文件</strong>
-        <span>扫描 storage/objects 目录，删除数据库没有登记的对象文件。已登记文件不会被删除。</span>
+      <div class="maintenance-main">
+        <div>
+          <strong>清理孤立本地文件</strong>
+          <span>扫描 storage/objects 目录，删除数据库没有登记的对象文件。已登记文件不会被删除。</span>
+        </div>
+        <div v-if="storageCleanup.orphanResult" class="cleanup-summary">
+          <div>
+            <strong>{{ formatSize(storageCleanup.orphanResult.releasedBytes || 0) }}</strong>
+            <span>释放空间</span>
+          </div>
+          <div>
+            <strong>{{ storageCleanup.orphanResult.scannedObjectFiles || 0 }}</strong>
+            <span>扫描对象</span>
+          </div>
+          <div>
+            <strong>{{ storageCleanup.orphanResult.deletedObjectFiles || 0 }}</strong>
+            <span>删除对象</span>
+          </div>
+          <div>
+            <strong>{{ storageCleanup.orphanResult.failedObjectFiles || 0 }}</strong>
+            <span>失败对象</span>
+          </div>
+        </div>
       </div>
       <button class="text-button danger-text" :disabled="busy || storageCleanup.orphanRunning" @click="cleanupOrphanStorageObjects">
         <Trash2 :size="16" />{{ storageCleanup.orphanRunning ? '清理中' : '清理孤立文件' }}
       </button>
-    </div>
-
-    <div v-if="storageCleanup.result" class="cleanup-summary">
-      <div>
-        <strong>{{ formatSize(storageCleanup.result.releasedBytes || 0) }}</strong>
-        <span>释放空间</span>
-      </div>
-      <div>
-        <strong>{{ storageCleanup.result.expiredUploadSessions || 0 }}</strong>
-        <span>过期上传任务</span>
-      </div>
-      <div>
-        <strong>{{ storageCleanup.result.deletedTemporaryFiles || 0 }}</strong>
-        <span>临时文件</span>
-      </div>
-      <div>
-        <strong>{{ storageCleanup.result.failedTemporaryFiles || 0 }}</strong>
-        <span>失败文件</span>
-      </div>
-    </div>
-
-    <div v-if="storageCleanup.orphanResult" class="cleanup-summary">
-      <div>
-        <strong>{{ formatSize(storageCleanup.orphanResult.releasedBytes || 0) }}</strong>
-        <span>释放空间</span>
-      </div>
-      <div>
-        <strong>{{ storageCleanup.orphanResult.scannedObjectFiles || 0 }}</strong>
-        <span>扫描对象</span>
-      </div>
-      <div>
-        <strong>{{ storageCleanup.orphanResult.deletedObjectFiles || 0 }}</strong>
-        <span>删除对象</span>
-      </div>
-      <div>
-        <strong>{{ storageCleanup.orphanResult.failedObjectFiles || 0 }}</strong>
-        <span>失败对象</span>
-      </div>
     </div>
   </section>
 </section>
