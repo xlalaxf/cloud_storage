@@ -27,6 +27,7 @@ import org.hibernate.annotations.UpdateTimestamp;
         name = "files",
         indexes = {
             @Index(name = "idx_files_owner_parent", columnList = "owner_id,parent_id"),
+            @Index(name = "idx_files_owner_parent_name_deleted", columnList = "owner_id,parent_id,name,deleted"),
             @Index(name = "idx_files_deleted", columnList = "deleted")
         })
 public class CloudFile {

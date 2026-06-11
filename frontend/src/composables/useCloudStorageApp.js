@@ -94,6 +94,9 @@ export function useCloudStorageApp() {
     totalEntries: 0,
     processedBytes: 0,
     totalBytes: 0,
+    currentEntryName: '',
+    speed: 0,
+    elapsed: 0,
     message: '',
   })
   
@@ -1321,6 +1324,9 @@ export function useCloudStorageApp() {
     extractProgress.totalEntries = job.totalEntries || 0
     extractProgress.processedBytes = job.processedBytes || 0
     extractProgress.totalBytes = job.totalBytes || 0
+    extractProgress.currentEntryName = job.currentEntryName || ''
+    extractProgress.speed = job.speedBytesPerSecond || 0
+    extractProgress.elapsed = Math.round((job.elapsedMillis || 0) / 1000)
     extractProgress.message = job.message || ''
   }
 
@@ -1337,6 +1343,9 @@ export function useCloudStorageApp() {
     extractProgress.totalEntries = 0
     extractProgress.processedBytes = 0
     extractProgress.totalBytes = 0
+    extractProgress.currentEntryName = ''
+    extractProgress.speed = 0
+    extractProgress.elapsed = 0
     extractProgress.message = ''
   }
 

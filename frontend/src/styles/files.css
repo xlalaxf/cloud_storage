@@ -60,6 +60,12 @@
   flex-wrap: wrap;
 }
 
+.extract-current {
+  flex: 1 1 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .upload-bar {
   height: 6px;
   overflow: hidden;

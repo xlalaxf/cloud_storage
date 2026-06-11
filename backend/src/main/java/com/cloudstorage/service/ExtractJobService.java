@@ -77,6 +77,9 @@ public class ExtractJobService {
                 job.totalEntries,
                 job.processedBytes,
                 job.totalBytes,
+                job.currentEntryName,
+                job.speedBytesPerSecond(),
+                job.elapsedMillis(),
                 job.message,
                 job.root,
                 job.startedAt,
@@ -93,6 +96,7 @@ public class ExtractJobService {
         private volatile int totalEntries = 0;
         private volatile long processedBytes = 0;
         private volatile long totalBytes = 0;
+        private volatile String currentEntryName = "";
         private volatile String message = "等待解压";
         private volatile FileResponse root;
         private final Instant startedAt = Instant.now();
@@ -125,14 +129,18 @@ public class ExtractJobService {
             this.message = "正在解压";
         }
 
-        public void advance(int processedEntries, long processedBytes) {
+        public void advance(int processedEntries, long processedBytes, String currentEntryName) {
             this.processedEntries = processedEntries;
             this.processedBytes = processedBytes;
+            this.currentEntryName = currentEntryName == null ? "" : currentEntryName;
         }
 
         public void complete(FileResponse root) {
             this.root = root;
             this.status = ExtractStatus.COMPLETED;
+            this.processedEntries = Math.max(this.processedEntries, this.totalEntries);
+            this.processedBytes = Math.max(this.processedBytes, this.totalBytes);
+            this.currentEntryName = "";
             this.percent();
             this.message = "解压完成";
             this.completedAt = Instant.now();
@@ -146,6 +154,16 @@ public class ExtractJobService {
 
         public boolean isRunning() {
             return status == ExtractStatus.PENDING || status == ExtractStatus.SCANNING || status == ExtractStatus.RUNNING;
+        }
+
+        public long speedBytesPerSecond() {
+            long elapsed = Math.max(1, elapsedMillis());
+            return Math.max(0, (processedBytes * 1000) / elapsed);
+        }
+
+        public long elapsedMillis() {
+            Instant end = completedAt == null ? Instant.now() : completedAt;
+            return Math.max(0, end.toEpochMilli() - startedAt.toEpochMilli());
         }
 
         public int percent() {

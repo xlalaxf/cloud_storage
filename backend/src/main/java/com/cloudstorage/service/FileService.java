@@ -25,14 +25,17 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Enumeration;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipException;
 import java.util.zip.ZipFile;
-import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.core.io.Resource;
@@ -302,36 +305,37 @@ public class FileService {
             job.scanning(archive.getName());
         }
         Path archivePath = storageService.objectPath(requireObject(archive).getRelativePath());
-        List<ZipEntry> entries = readZipEntries(archivePath);
+        List<ZipEntryPlan> entries = readZipEntries(archivePath);
         ZipStats stats = scanZipEntries(entries);
         if (job != null) {
             job.extracting(stats.totalEntries(), stats.totalBytes());
         }
         CloudFile extractRoot = createExtractRoot(user, archive);
+        ExtractContext context = new ExtractContext(user, extractRoot);
         List<FileResponse> extracted = new ArrayList<>();
         List<FileStorageService.StoredObject> storedObjects = new ArrayList<>();
         try (ZipFile zipFile = openZipFile(archivePath)) {
             int processedEntries = 0;
             long extractedBytes = 0;
-            for (ZipEntry entry : entries) {
-                long entrySize = entry.getSize();
-                List<String> parts = safeZipParts(entry.getName());
+            for (ZipEntryPlan entry : entries) {
+                long entrySize = entry.size();
+                List<String> parts = entry.parts();
                 if (parts.isEmpty()) {
                     processedEntries++;
                     if (job != null) {
-                        job.advance(processedEntries, extractedBytes);
+                        job.advance(processedEntries, extractedBytes, entry.name());
                     }
                     continue;
                 }
-                CloudFile parent = ensureZipParent(user, extractRoot, parts.subList(0, parts.size() - 1));
+                CloudFile parent = ensureZipParent(context, parts.subList(0, parts.size() - 1));
                 String name = storageService.sanitizeName(parts.get(parts.size() - 1));
-                if (entry.isDirectory()) {
-                    ensureFolder(user, parent, name);
+                if (entry.directory()) {
+                    context.ensureFolder(parent, name);
                 } else {
-                    String uniqueName = uniqueName(user.getId(), parent.getId(), name);
+                    String uniqueName = context.uniqueName(parent, name);
                     String contentType = URLConnection.guessContentTypeFromName(uniqueName);
-                    try (InputStream entryStream = zipFile.getInputStream(entry)) {
-                        FileStorageService.StoredObject stored = storageService.storeStream(
+                    try (InputStream entryStream = zipFile.getInputStream(entry.entry())) {
+                        FileStorageService.StoredObject stored = storageService.storeStreamFast(
                                 entryStream, user.getId(), uniqueName, contentType);
                         storedObjects.add(stored);
                         if (entrySize > 0) {
@@ -346,7 +350,7 @@ public class FileService {
                 }
                 processedEntries++;
                 if (job != null) {
-                    job.advance(processedEntries, extractedBytes);
+                    job.advance(processedEntries, extractedBytes, entry.name());
                 }
             }
             extracted.add(0, fileMapper.toResponse(extractRoot));
@@ -586,6 +590,10 @@ public class FileService {
         return fileRepository.existsByOwnerIdAndParentIdAndNameAndDeletedFalse(ownerId, parentId, name);
     }
 
+    private String nameKey(String name) {
+        return name == null ? "" : name.toLowerCase(Locale.ROOT);
+    }
+
     private String parentDetail(CloudFile parent) {
         return parent == null ? "父目录: 根目录" : "父目录: " + parent.getName() + " (#" + parent.getId() + ")";
     }
@@ -606,11 +614,11 @@ public class FileService {
         return fileRepository.save(folder);
     }
 
-    private CloudFile ensureZipParent(User user, CloudFile root, List<String> folderParts) {
-        CloudFile parent = root;
+    private CloudFile ensureZipParent(ExtractContext context, List<String> folderParts) {
+        CloudFile parent = context.root();
         for (String rawPart : folderParts) {
             String part = storageService.sanitizeName(rawPart);
-            parent = ensureFolder(user, parent, part);
+            parent = context.ensureFolder(parent, part);
         }
         return parent;
     }
@@ -627,14 +635,14 @@ public class FileService {
         }
     }
 
-    private List<ZipEntry> readZipEntries(Path archivePath) {
+    private List<ZipEntryPlan> readZipEntries(Path archivePath) {
         try (ZipFile zipFile = openZipFile(archivePath)) {
-            List<ZipEntry> entries = new ArrayList<>();
+            List<ZipEntryPlan> entries = new ArrayList<>();
             Enumeration<? extends ZipEntry> enumeration = zipFile.entries();
             while (enumeration.hasMoreElements()) {
-                entries.add(enumeration.nextElement());
+                ZipEntry entry = enumeration.nextElement();
+                entries.add(new ZipEntryPlan(entry, safeZipParts(entry.getName())));
             }
-            entries.forEach(entry -> safeZipParts(entry.getName()));
             return entries;
         } catch (IllegalArgumentException ex) {
             throw AppException.badRequest("压缩包中存在非法路径");
@@ -651,15 +659,14 @@ public class FileService {
         }
     }
 
-    private ZipStats scanZipEntries(List<ZipEntry> entries) {
+    private ZipStats scanZipEntries(List<ZipEntryPlan> entries) {
         if (entries.size() > ZIP_ENTRY_LIMIT) {
             throw AppException.badRequest("压缩包文件数量超过限制");
         }
         long totalBytes = 0;
-        for (ZipEntry entry : entries) {
-            safeZipParts(entry.getName());
-            long size = entry.getSize();
-            if (!entry.isDirectory() && size > 0) {
+        for (ZipEntryPlan entry : entries) {
+            long size = entry.size();
+            if (!entry.directory() && size > 0) {
                 totalBytes += size;
                 if (totalBytes > ZIP_EXTRACTED_SIZE_LIMIT) {
                     throw AppException.badRequest("压缩包解压后体积超过限制");
@@ -681,6 +688,67 @@ public class FileService {
                     folder.setName(uniqueName(user.getId(), parentId, name));
                     return fileRepository.save(folder);
                 });
+    }
+
+    private final class ExtractContext {
+        private final User user;
+        private final CloudFile root;
+        private final Map<Long, Map<String, CloudFile>> foldersByParent = new HashMap<>();
+        private final Map<Long, Set<String>> namesByParent = new HashMap<>();
+
+        private ExtractContext(User user, CloudFile root) {
+            this.user = user;
+            this.root = root;
+            registerName(root.getParent() == null ? null : root.getParent().getId(), root.getName());
+        }
+
+        private CloudFile root() {
+            return root;
+        }
+
+        private CloudFile ensureFolder(CloudFile parent, String requestedName) {
+            Long parentId = parent.getId();
+            String cacheKey = nameKey(requestedName);
+            Map<String, CloudFile> childFolders = foldersByParent.computeIfAbsent(parentId, ignored -> new HashMap<>());
+            CloudFile cached = childFolders.get(cacheKey);
+            if (cached != null) {
+                return cached;
+            }
+            String name = uniqueName(parent, requestedName);
+            CloudFile folder = new CloudFile();
+            folder.setOwner(attachedUser(user));
+            folder.setParent(parent);
+            folder.setFileKind(FileKind.FOLDER);
+            folder.setName(name);
+            CloudFile saved = fileRepository.save(folder);
+            childFolders.put(cacheKey, saved);
+            childFolders.put(nameKey(name), saved);
+            return saved;
+        }
+
+        private String uniqueName(CloudFile parent, String requestedName) {
+            Long parentId = parent.getId();
+            Set<String> names = namesByParent.computeIfAbsent(parentId, ignored -> new HashSet<>());
+            String baseName = requestedName;
+            String extension = "";
+            int dot = requestedName.lastIndexOf('.');
+            if (dot > 0) {
+                baseName = requestedName.substring(0, dot);
+                extension = requestedName.substring(dot);
+            }
+            String candidate = requestedName;
+            int index = 1;
+            while (!names.add(nameKey(candidate))) {
+                candidate = baseName + " (" + index++ + ")" + extension;
+            }
+            return candidate;
+        }
+
+        private void registerName(Long parentId, String name) {
+            if (parentId != null && name != null) {
+                namesByParent.computeIfAbsent(parentId, ignored -> new HashSet<>()).add(nameKey(name));
+            }
+        }
     }
 
     private List<String> safeZipParts(String entryName) {
@@ -779,6 +847,20 @@ public class FileService {
     }
 
     public record DownloadPayload(Resource resource, String filename, MediaType mediaType, long sizeBytes) {
+    }
+
+    private record ZipEntryPlan(ZipEntry entry, List<String> parts) {
+        private String name() {
+            return entry.getName();
+        }
+
+        private boolean directory() {
+            return entry.isDirectory();
+        }
+
+        private long size() {
+            return entry.getSize();
+        }
     }
 
     private record ZipStats(int totalEntries, long totalBytes) {

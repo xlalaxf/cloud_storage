@@ -111,6 +111,9 @@ const {
         <span>{{ extractProgress.message }}</span>
         <span v-if="extractProgress.totalEntries">{{ extractProgress.processedEntries }} / {{ extractProgress.totalEntries }} 项</span>
         <span v-if="extractProgress.totalBytes">{{ formatSize(extractProgress.processedBytes) }} / {{ formatSize(extractProgress.totalBytes) }}</span>
+        <span v-if="extractProgress.speed">{{ formatSpeed(extractProgress.speed) }}</span>
+        <span v-if="extractProgress.elapsed">已用 {{ formatDuration(extractProgress.elapsed) }}</span>
+        <span v-if="extractProgress.currentEntryName" class="extract-current">{{ extractProgress.currentEntryName }}</span>
       </div>
       <div class="upload-bar" aria-hidden="true">
         <span :style="{ width: `${extractProgress.percent}%` }"></span>

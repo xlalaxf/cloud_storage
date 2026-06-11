@@ -25,6 +25,8 @@ import org.springframework.web.multipart.MultipartFile;
 
 @Service
 public class FileStorageService {
+    private static final int STREAM_BUFFER_SIZE = 1024 * 1024;
+
     private final Path root;
 
     public FileStorageService(@Value("${storage.root:storage}") String root) {
@@ -47,6 +49,10 @@ public class FileStorageService {
 
     public StoredObject storeStream(InputStream inputStream, Long userId, String safeName, String contentType) {
         return prepareObject(inputStream, safeName, contentType);
+    }
+
+    public StoredObject storeStreamFast(InputStream inputStream, Long userId, String safeName, String contentType) {
+        return prepareObjectWithBuffer(inputStream, safeName, contentType, true);
     }
 
     public StoredObject storeOpenStream(InputStream inputStream, Long userId, String safeName, String contentType) {
@@ -134,6 +140,70 @@ public class FileStorageService {
                 }
             }
         }
+    }
+
+    private StoredObject prepareObjectWithBuffer(InputStream inputStream, String safeName, String contentType, boolean closeInputStream) {
+        Path temp = null;
+        try {
+            Files.createDirectories(root.resolve("tmp"));
+            temp = Files.createTempFile(root.resolve("tmp"), "upload-", ".tmp");
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            long size;
+            DigestInputStream digestInputStream = new DigestInputStream(inputStream, digest);
+            try {
+                size = copyToFile(digestInputStream, temp);
+            } finally {
+                if (closeInputStream) {
+                    digestInputStream.close();
+                }
+            }
+            String sha256 = hex(digest.digest());
+            String extension = extensionOf(safeName);
+            String storedName = sha256;
+            Path relative = Paths.get(
+                    "objects",
+                    sha256.substring(0, 2),
+                    sha256.substring(2, 4),
+                    storedName);
+            Path target = safeResolve(relative);
+            Files.createDirectories(target.getParent());
+            boolean created = !Files.exists(target);
+            if (created) {
+                Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE);
+                temp = null;
+            }
+            String resolvedContentType = contentType;
+            if (resolvedContentType == null || resolvedContentType.isBlank()) {
+                resolvedContentType = URLConnection.guessContentTypeFromName(safeName);
+            }
+            if (resolvedContentType == null || resolvedContentType.isBlank()) {
+                resolvedContentType = "application/octet-stream";
+            }
+            return new StoredObject(storedName, normalizePath(relative), resolvedContentType, extension, size, sha256, created);
+        } catch (IOException | NoSuchAlgorithmException ex) {
+            throw AppException.badRequest("鏂囦欢淇濆瓨澶辫触");
+        } finally {
+            if (temp != null) {
+                try {
+                    Files.deleteIfExists(temp);
+                } catch (IOException ignored) {
+                    // Best effort cleanup for failed or deduplicated uploads.
+                }
+            }
+        }
+    }
+
+    private long copyToFile(InputStream inputStream, Path target) throws IOException {
+        byte[] buffer = new byte[STREAM_BUFFER_SIZE];
+        long total = 0;
+        try (var outputStream = Files.newOutputStream(target)) {
+            int read;
+            while ((read = inputStream.read(buffer)) >= 0) {
+                outputStream.write(buffer, 0, read);
+                total += read;
+            }
+        }
+        return total;
     }
 
     public StoredObject copyExisting(String relativePath, Long userId, String safeName, String contentType) {
