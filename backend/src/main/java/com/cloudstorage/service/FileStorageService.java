@@ -4,6 +4,8 @@ import jakarta.annotation.PostConstruct;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URLConnection;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -116,9 +118,8 @@ public class FileStorageService {
                     storedName);
             Path target = safeResolve(relative);
             Files.createDirectories(target.getParent());
-            boolean created = !Files.exists(target);
+            boolean created = moveTempIfAbsent(temp, target);
             if (created) {
-                Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE);
                 temp = null;
             }
             String resolvedContentType = contentType;
@@ -167,9 +168,8 @@ public class FileStorageService {
                     storedName);
             Path target = safeResolve(relative);
             Files.createDirectories(target.getParent());
-            boolean created = !Files.exists(target);
+            boolean created = moveTempIfAbsent(temp, target);
             if (created) {
-                Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE);
                 temp = null;
             }
             String resolvedContentType = contentType;
@@ -181,7 +181,7 @@ public class FileStorageService {
             }
             return new StoredObject(storedName, normalizePath(relative), resolvedContentType, extension, size, sha256, created);
         } catch (IOException | NoSuchAlgorithmException ex) {
-            throw AppException.badRequest("鏂囦欢淇濆瓨澶辫触");
+            throw AppException.badRequest("文件保存失败");
         } finally {
             if (temp != null) {
                 try {
@@ -204,6 +204,25 @@ public class FileStorageService {
             }
         }
         return total;
+    }
+
+    private boolean moveTempIfAbsent(Path temp, Path target) throws IOException {
+        if (Files.exists(target)) {
+            return false;
+        }
+        try {
+            Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE);
+            return true;
+        } catch (FileAlreadyExistsException ex) {
+            return false;
+        } catch (AtomicMoveNotSupportedException ex) {
+            try {
+                Files.move(temp, target);
+                return true;
+            } catch (FileAlreadyExistsException duplicate) {
+                return false;
+            }
+        }
     }
 
     public StoredObject copyExisting(String relativePath, Long userId, String safeName, String contentType) {

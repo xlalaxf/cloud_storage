@@ -10,12 +10,18 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.springframework.stereotype.Service;
 
 @Service
 public class ExtractJobService {
+    private static final int MAX_CONCURRENT_JOBS = Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors() / 2));
+
     private final FileService fileService;
-    private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final ExecutorService executor = Executors.newFixedThreadPool(
+            MAX_CONCURRENT_JOBS,
+            namedThreadFactory("extract-job-"));
     private final Map<String, ExtractJob> jobs = new ConcurrentHashMap<>();
     private final Map<String, String> activeByUserFile = new ConcurrentHashMap<>();
 
@@ -64,6 +70,15 @@ public class ExtractJobService {
 
     private String activeKey(Long userId, Long fileId) {
         return userId + ":" + fileId;
+    }
+
+    private static ThreadFactory namedThreadFactory(String prefix) {
+        AtomicInteger sequence = new AtomicInteger(1);
+        return runnable -> {
+            Thread thread = new Thread(runnable, prefix + sequence.getAndIncrement());
+            thread.setDaemon(true);
+            return thread;
+        };
     }
 
     private ExtractJobResponse toResponse(ExtractJob job) {
@@ -126,6 +141,9 @@ public class ExtractJobService {
             this.status = ExtractStatus.RUNNING;
             this.totalEntries = totalEntries;
             this.totalBytes = totalBytes;
+            this.processedEntries = 0;
+            this.processedBytes = 0;
+            this.currentEntryName = "";
             this.message = "正在解压";
         }
 

@@ -23,6 +23,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.Enumeration;
 import java.util.HashMap;
@@ -32,6 +33,16 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorCompletionService;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipException;
@@ -41,13 +52,16 @@ import org.springframework.core.io.InputStreamResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
 @Service
 public class FileService {
     private static final int ZIP_ENTRY_LIMIT = 10000;
     private static final long ZIP_EXTRACTED_SIZE_LIMIT = 3L * 1024 * 1024 * 1024;
+    private static final int ZIP_EXTRACT_WORKERS = Math.max(2, Math.min(8, Runtime.getRuntime().availableProcessors()));
 
     private final CloudFileRepository fileRepository;
     private final StorageObjectRepository objectRepository;
@@ -55,6 +69,7 @@ public class FileService {
     private final FileStorageService storageService;
     private final FileMapper fileMapper;
     private final AuditService auditService;
+    private final TransactionTemplate transactionTemplate;
 
     public FileService(
             CloudFileRepository fileRepository,
@@ -62,13 +77,15 @@ public class FileService {
             UserRepository userRepository,
             FileStorageService storageService,
             FileMapper fileMapper,
-            AuditService auditService) {
+            AuditService auditService,
+            PlatformTransactionManager transactionManager) {
         this.fileRepository = fileRepository;
         this.objectRepository = objectRepository;
         this.userRepository = userRepository;
         this.storageService = storageService;
         this.fileMapper = fileMapper;
         this.auditService = auditService;
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
     @Transactional(readOnly = true)
@@ -274,7 +291,6 @@ public class FileService {
         }
     }
 
-    @Transactional
     public List<FileResponse> extractZip(User user, Long fileId) {
         return extractZip(user.getId(), fileId, null);
     }
@@ -287,7 +303,6 @@ public class FileService {
         }
     }
 
-    @Transactional
     public void extractZipJob(ExtractJobService.ExtractJob job) {
         List<FileResponse> extracted = extractZip(job.userId(), job.fileId(), job);
         if (!extracted.isEmpty()) {
@@ -296,74 +311,48 @@ public class FileService {
     }
 
     private List<FileResponse> extractZip(Long userId, Long fileId, ExtractJobService.ExtractJob job) {
-        User user = userRepository.findById(userId).orElseThrow(() -> AppException.notFound("用户不存在"));
-        CloudFile archive = requireOwned(user, fileId);
-        if (archive.getFileKind() != FileKind.FILE || !isZip(archive)) {
-            throw AppException.badRequest("当前仅支持 ZIP 文件在线解压");
-        }
+        ExtractArchive archive = loadExtractArchive(userId, fileId);
         if (job != null) {
-            job.scanning(archive.getName());
+            job.scanning(archive.name());
         }
-        Path archivePath = storageService.objectPath(requireObject(archive).getRelativePath());
-        List<ZipEntryPlan> entries = readZipEntries(archivePath);
+        List<ZipEntryPlan> entries = readZipEntries(archive.archivePath());
         ZipStats stats = scanZipEntries(entries);
-        if (job != null) {
-            job.extracting(stats.totalEntries(), stats.totalBytes());
-        }
-        CloudFile extractRoot = createExtractRoot(user, archive);
-        ExtractContext context = new ExtractContext(user, extractRoot);
-        List<FileResponse> extracted = new ArrayList<>();
         List<FileStorageService.StoredObject> storedObjects = new ArrayList<>();
-        try (ZipFile zipFile = openZipFile(archivePath)) {
-            int processedEntries = 0;
-            long extractedBytes = 0;
-            for (ZipEntryPlan entry : entries) {
-                long entrySize = entry.size();
-                List<String> parts = entry.parts();
-                if (parts.isEmpty()) {
-                    processedEntries++;
-                    if (job != null) {
-                        job.advance(processedEntries, extractedBytes, entry.name());
-                    }
-                    continue;
-                }
-                CloudFile parent = ensureZipParent(context, parts.subList(0, parts.size() - 1));
-                String name = storageService.sanitizeName(parts.get(parts.size() - 1));
-                if (entry.directory()) {
-                    context.ensureFolder(parent, name);
-                } else {
-                    String uniqueName = context.uniqueName(parent, name);
-                    String contentType = URLConnection.guessContentTypeFromName(uniqueName);
-                    try (InputStream entryStream = zipFile.getInputStream(entry.entry())) {
-                        FileStorageService.StoredObject stored = storageService.storeStreamFast(
-                                entryStream, user.getId(), uniqueName, contentType);
-                        storedObjects.add(stored);
-                        if (entrySize > 0) {
-                            extractedBytes += entrySize;
-                        } else {
-                            extractedBytes += stored.size();
-                        }
-                        StorageObject object = resolveObject(stored);
-                        CloudFile extractedFile = buildFile(attachedUser(user), parent, uniqueName, object);
-                        extracted.add(fileMapper.toResponse(fileRepository.save(extractedFile)));
-                    }
-                }
-                processedEntries++;
-                if (job != null) {
-                    job.advance(processedEntries, extractedBytes, entry.name());
-                }
+        ExtractPlan plan = null;
+        try {
+            if (job != null) {
+                job.extracting(stats.totalEntries(), stats.totalBytes());
             }
-            extracted.add(0, fileMapper.toResponse(extractRoot));
-            auditService.recordFileOperation(user, extractRoot, "EXTRACT", "来源压缩包: " + archive.getName());
-            return extracted;
+            plan = transactionTemplate.execute(status -> createExtractPlan(userId, archive, entries, job));
+            if (plan == null) {
+                throw AppException.badRequest("解压失败，请稍后重试");
+            }
+            List<ExtractedObject> extractedObjects = extractPlannedFiles(
+                    archive.archivePath(), userId, plan.files(), stats, job, storedObjects);
+            ExtractPlan completedPlan = plan;
+            return transactionTemplate.execute(status -> persistExtractedFiles(userId, archive, completedPlan, extractedObjects));
         } catch (Exception ex) {
             if (ex instanceof AppException appException) {
                 cleanupCreatedObjects(storedObjects);
+                cleanupExtractRoot(userId, plan);
                 throw appException;
             }
             cleanupCreatedObjects(storedObjects);
+            cleanupExtractRoot(userId, plan);
             throw AppException.badRequest("解压失败，请确认压缩包未损坏");
         }
+    }
+
+    private ExtractArchive loadExtractArchive(Long userId, Long fileId) {
+        return transactionTemplate.execute(status -> {
+            User user = userRepository.findById(userId).orElseThrow(() -> AppException.notFound("用户不存在"));
+            CloudFile archive = requireOwned(user, fileId);
+            if (archive.getFileKind() != FileKind.FILE || !isZip(archive)) {
+                throw AppException.badRequest("当前仅支持 ZIP 文件在线解压");
+            }
+            Path archivePath = storageService.objectPath(requireObject(archive).getRelativePath());
+            return new ExtractArchive(archive.getId(), archive.getName(), archivePath);
+        });
     }
 
     @Transactional(readOnly = true)
@@ -614,13 +603,222 @@ public class FileService {
         return fileRepository.save(folder);
     }
 
-    private CloudFile ensureZipParent(ExtractContext context, List<String> folderParts) {
+    private ExtractPlan createExtractPlan(
+            Long userId,
+            ExtractArchive archive,
+            List<ZipEntryPlan> entries,
+            ExtractJobService.ExtractJob job) {
+        User user = userRepository.findById(userId).orElseThrow(() -> AppException.notFound("用户不存在"));
+        CloudFile archiveFile = requireOwned(user, archive.fileId());
+        CloudFile extractRoot = createExtractRoot(user, archiveFile);
+        ExtractContext context = new ExtractContext(user, extractRoot);
+        List<PlannedExtractFile> files = new ArrayList<>();
+        int processedEntries = 0;
+        for (ZipEntryPlan entry : entries) {
+            List<String> parts = entry.parts();
+            if (!parts.isEmpty()) {
+                CloudFile parent = ensurePlannedZipParent(context, parts.subList(0, parts.size() - 1));
+                String name = storageService.sanitizeName(parts.get(parts.size() - 1));
+                if (entry.directory()) {
+                    context.ensureFolder(parent, name);
+                } else {
+                    String uniqueName = context.uniqueName(parent, name);
+                    String contentType = URLConnection.guessContentTypeFromName(uniqueName);
+                    files.add(new PlannedExtractFile(
+                            files.size(),
+                            entry.name(),
+                            entry.size(),
+                            parent.getId(),
+                            uniqueName,
+                            contentType));
+                }
+            }
+            processedEntries++;
+            if (job != null) {
+                job.advance(processedEntries, 0, entry.name());
+            }
+        }
+        return new ExtractPlan(extractRoot.getId(), files);
+    }
+
+    private CloudFile ensurePlannedZipParent(ExtractContext context, List<String> folderParts) {
         CloudFile parent = context.root();
         for (String rawPart : folderParts) {
             String part = storageService.sanitizeName(rawPart);
             parent = context.ensureFolder(parent, part);
         }
         return parent;
+    }
+
+    private List<ExtractedObject> extractPlannedFiles(
+            Path archivePath,
+            Long userId,
+            List<PlannedExtractFile> files,
+            ZipStats stats,
+            ExtractJobService.ExtractJob job,
+            Collection<FileStorageService.StoredObject> storedObjects) {
+        if (files.isEmpty()) {
+            return List.of();
+        }
+        int workerCount = Math.min(ZIP_EXTRACT_WORKERS, files.size());
+        ExecutorService executor = Executors.newFixedThreadPool(workerCount, namedThreadFactory("zip-extract-"));
+        ExecutorCompletionService<List<ExtractedObject>> completionService = new ExecutorCompletionService<>(executor);
+        ConcurrentLinkedQueue<PlannedExtractFile> queue = new ConcurrentLinkedQueue<>(files);
+        AtomicLong processedBytes = new AtomicLong(0);
+        AtomicLong processedFileEntries = new AtomicLong(0);
+        AtomicReference<String> currentEntryName = new AtomicReference<>("");
+        AtomicReference<AppException> progressFailure = new AtomicReference<>();
+        Thread progressThread = null;
+        List<Future<List<ExtractedObject>>> futures = new ArrayList<>();
+        try {
+            if (job != null) {
+                job.extracting(stats.totalEntries(), stats.totalBytes());
+                progressThread = startExtractProgressReporter(
+                        job,
+                        stats.totalEntries(),
+                        files.size(),
+                        processedFileEntries,
+                        processedBytes,
+                        currentEntryName,
+                        progressFailure);
+            }
+            for (int i = 0; i < workerCount; i++) {
+                futures.add(completionService.submit(() -> extractZipWorker(
+                        archivePath,
+                        userId,
+                        queue,
+                        processedBytes,
+                        processedFileEntries,
+                        currentEntryName)));
+            }
+            List<ExtractedObject> extracted = new ArrayList<>();
+            for (int i = 0; i < workerCount; i++) {
+                List<ExtractedObject> results = completionService.take().get();
+                for (ExtractedObject result : results) {
+                    storedObjects.add(result.storedObject());
+                    extracted.add(result);
+                }
+                AppException failure = progressFailure.get();
+                if (failure != null) {
+                    throw failure;
+                }
+            }
+            extracted.sort(Comparator.comparingInt(ExtractedObject::index));
+            if (job != null) {
+                job.advance(stats.totalEntries(), processedBytes.get(), "");
+            }
+            return extracted;
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw AppException.badRequest("解压任务已中断");
+        } catch (ExecutionException ex) {
+            Throwable cause = ex.getCause();
+            if (cause instanceof AppException appException) {
+                throw appException;
+            }
+            throw AppException.badRequest("解压失败，请确认压缩包未损坏");
+        } finally {
+            for (Future<List<ExtractedObject>> future : futures) {
+                future.cancel(true);
+            }
+            executor.shutdownNow();
+            if (progressThread != null) {
+                progressThread.interrupt();
+            }
+        }
+    }
+
+    private Thread startExtractProgressReporter(
+            ExtractJobService.ExtractJob job,
+            int totalEntries,
+            int totalFiles,
+            AtomicLong processedFileEntries,
+            AtomicLong processedBytes,
+            AtomicReference<String> currentEntryName,
+            AtomicReference<AppException> failure) {
+        Thread thread = new Thread(() -> {
+            try {
+                while (!Thread.currentThread().isInterrupted() && processedFileEntries.get() < totalFiles) {
+                    job.advance(estimateProcessedEntries(totalEntries, totalFiles, processedFileEntries.get()),
+                            processedBytes.get(),
+                            currentEntryName.get());
+                    Thread.sleep(500);
+                }
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+            } catch (RuntimeException ex) {
+                failure.compareAndSet(null, AppException.badRequest("解压进度更新失败"));
+            }
+        }, "zip-extract-progress-" + System.nanoTime());
+        thread.setDaemon(true);
+        thread.start();
+        return thread;
+    }
+
+    private int estimateProcessedEntries(int totalEntries, int totalFiles, long processedFiles) {
+        if (totalFiles <= 0) {
+            return totalEntries;
+        }
+        return Math.min(totalEntries, (int) Math.floor((processedFiles * totalEntries) / (double) totalFiles));
+    }
+
+    private List<ExtractedObject> extractZipWorker(
+            Path archivePath,
+            Long userId,
+            ConcurrentLinkedQueue<PlannedExtractFile> queue,
+            AtomicLong processedBytes,
+            AtomicLong processedFileEntries,
+            AtomicReference<String> currentEntryName) {
+        try (ZipFile zipFile = openZipFile(archivePath)) {
+            List<ExtractedObject> extracted = new ArrayList<>();
+            PlannedExtractFile file;
+            while ((file = queue.poll()) != null) {
+                currentEntryName.set(file.entryName());
+                ZipEntry entry = zipFile.getEntry(file.entryName());
+                if (entry == null || entry.isDirectory()) {
+                    throw AppException.badRequest("压缩包中存在无法读取的文件");
+                }
+                try (InputStream entryStream = zipFile.getInputStream(entry)) {
+                    FileStorageService.StoredObject stored = storageService.storeStreamFast(
+                            entryStream,
+                            userId,
+                            file.name(),
+                            file.contentType());
+                    processedBytes.addAndGet(file.size() > 0 ? file.size() : stored.size());
+                    processedFileEntries.incrementAndGet();
+                    extracted.add(new ExtractedObject(file.index(), file.parentId(), file.name(), stored));
+                }
+            }
+            return extracted;
+        } catch (IllegalArgumentException ex) {
+            throw AppException.badRequest("压缩包中存在非法路径");
+        } catch (IOException ex) {
+            throw AppException.badRequest("解压失败，请确认压缩包未损坏");
+        }
+    }
+
+    private List<FileResponse> persistExtractedFiles(
+            Long userId,
+            ExtractArchive archive,
+            ExtractPlan plan,
+            List<ExtractedObject> extractedObjects) {
+        User user = userRepository.findById(userId).orElseThrow(() -> AppException.notFound("用户不存在"));
+        CloudFile extractRoot = fileRepository.findByIdAndOwnerIdAndDeletedFalse(plan.rootId(), userId)
+                .orElseThrow(() -> AppException.notFound("解压目录不存在"));
+        Map<Long, CloudFile> parentCache = new HashMap<>();
+        parentCache.put(extractRoot.getId(), extractRoot);
+        List<FileResponse> extracted = new ArrayList<>();
+        for (ExtractedObject extractedObject : extractedObjects) {
+            StorageObject object = resolveObject(extractedObject.storedObject());
+            CloudFile parent = parentCache.computeIfAbsent(extractedObject.parentId(), parentId ->
+                    fileRepository.findByIdAndOwnerIdAndDeletedFalse(parentId, userId)
+                            .orElseThrow(() -> AppException.notFound("解压目录不存在")));
+            CloudFile extractedFile = buildFile(attachedUser(user), parent, extractedObject.name(), object);
+            extracted.add(fileMapper.toResponse(fileRepository.save(extractedFile)));
+        }
+        extracted.add(0, fileMapper.toResponse(extractRoot));
+        auditService.recordFileOperation(user, extractRoot, "EXTRACT", "来源压缩包: " + archive.name());
+        return extracted;
     }
 
     private void cleanupCreatedObjects(List<FileStorageService.StoredObject> storedObjects) {
@@ -635,13 +833,30 @@ public class FileService {
         }
     }
 
+    private void cleanupExtractRoot(Long userId, ExtractPlan plan) {
+        if (plan == null || plan.rootId() == null) {
+            return;
+        }
+        try {
+            transactionTemplate.executeWithoutResult(status ->
+                    fileRepository.findByIdAndOwnerIdAndDeletedFalse(plan.rootId(), userId)
+                            .ifPresent(this::deleteRecursive));
+        } catch (RuntimeException ignored) {
+            // Best effort cleanup for a failed extraction tree.
+        }
+    }
+
     private List<ZipEntryPlan> readZipEntries(Path archivePath) {
         try (ZipFile zipFile = openZipFile(archivePath)) {
             List<ZipEntryPlan> entries = new ArrayList<>();
             Enumeration<? extends ZipEntry> enumeration = zipFile.entries();
             while (enumeration.hasMoreElements()) {
                 ZipEntry entry = enumeration.nextElement();
-                entries.add(new ZipEntryPlan(entry, safeZipParts(entry.getName())));
+                entries.add(new ZipEntryPlan(
+                        entry.getName(),
+                        entry.isDirectory(),
+                        entry.getSize(),
+                        safeZipParts(entry.getName())));
             }
             return entries;
         } catch (IllegalArgumentException ex) {
@@ -674,20 +889,6 @@ public class FileService {
             }
         }
         return new ZipStats(entries.size(), totalBytes);
-    }
-
-    private CloudFile ensureFolder(User user, CloudFile parent, String name) {
-        Long parentId = parent.getId();
-        return fileRepository.findFirstByOwnerIdAndParentIdAndNameAndFileKindAndDeletedFalse(
-                        user.getId(), parentId, name, FileKind.FOLDER)
-                .orElseGet(() -> {
-                    CloudFile folder = new CloudFile();
-                    folder.setOwner(attachedUser(user));
-                    folder.setParent(parent);
-                    folder.setFileKind(FileKind.FOLDER);
-                    folder.setName(uniqueName(user.getId(), parentId, name));
-                    return fileRepository.save(folder);
-                });
     }
 
     private final class ExtractContext {
@@ -723,6 +924,7 @@ public class FileService {
             CloudFile saved = fileRepository.save(folder);
             childFolders.put(cacheKey, saved);
             childFolders.put(nameKey(name), saved);
+            registerName(parentId, name);
             return saved;
         }
 
@@ -849,18 +1051,38 @@ public class FileService {
     public record DownloadPayload(Resource resource, String filename, MediaType mediaType, long sizeBytes) {
     }
 
-    private record ZipEntryPlan(ZipEntry entry, List<String> parts) {
-        private String name() {
-            return entry.getName();
-        }
+    private ThreadFactory namedThreadFactory(String prefix) {
+        AtomicInteger sequence = new AtomicInteger(1);
+        return runnable -> {
+            Thread thread = new Thread(runnable, prefix + sequence.getAndIncrement());
+            thread.setDaemon(true);
+            return thread;
+        };
+    }
 
-        private boolean directory() {
-            return entry.isDirectory();
-        }
+    private record ExtractArchive(Long fileId, String name, Path archivePath) {
+    }
 
-        private long size() {
-            return entry.getSize();
-        }
+    private record ZipEntryPlan(String name, boolean directory, long size, List<String> parts) {
+    }
+
+    private record ExtractPlan(Long rootId, List<PlannedExtractFile> files) {
+    }
+
+    private record PlannedExtractFile(
+            int index,
+            String entryName,
+            long size,
+            Long parentId,
+            String name,
+            String contentType) {
+    }
+
+    private record ExtractedObject(
+            int index,
+            Long parentId,
+            String name,
+            FileStorageService.StoredObject storedObject) {
     }
 
     private record ZipStats(int totalEntries, long totalBytes) {
