@@ -1,10 +1,11 @@
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 20;
+  z-index: 100;
   display: grid;
   place-items: center;
   padding: 20px;
+  overflow: auto;
   background: rgba(29, 36, 51, 0.5);
 }
 
@@ -208,6 +209,13 @@
   margin-bottom: 12px;
 }
 
+.preview-modal header h2 {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .preview-modal img,
 .preview-modal video,
 .preview-modal iframe {
@@ -247,7 +255,7 @@
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
-  z-index: 60;
+  z-index: 120;
   width: max-content;
   max-width: min(460px, calc(100vw - 40px));
   padding: 14px 18px;
@@ -270,4 +278,46 @@
 
 .toast.info {
   background: #263241;
+}
+
+@media (max-width: 680px) {
+  .modal-backdrop {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 12px;
+  }
+
+  .preview-modal {
+    width: min(100%, calc(100vw - 24px));
+    max-height: calc(100dvh - 24px);
+    margin: auto;
+    padding: 14px;
+  }
+
+  .preview-modal header h2 {
+    font-size: 16px;
+    line-height: 1.35;
+  }
+
+  .preview-modal img,
+  .preview-modal video,
+  .preview-modal iframe {
+    max-height: calc(100dvh - 136px);
+  }
+
+  .preview-modal pre {
+    max-height: calc(100dvh - 136px);
+  }
+}
+
+@media (max-width: 420px) {
+  .modal-backdrop {
+    padding: 10px;
+  }
+
+  .preview-modal {
+    width: calc(100vw - 20px);
+    max-height: calc(100dvh - 20px);
+  }
 }

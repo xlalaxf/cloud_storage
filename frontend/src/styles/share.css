@@ -51,6 +51,17 @@
   gap: 10px;
 }
 
+.share-file-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.share-file-actions .icon-button {
+  flex: 0 0 auto;
+}
+
 @media (max-width: 680px) {
   .share-page {
     place-items: stretch;
@@ -120,7 +131,7 @@
 
   .share-shell .compact .file-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 42px;
+    grid-template-columns: minmax(0, 1fr) auto;
     gap: 5px 10px;
     min-height: 0;
     padding: 12px 12px 12px 14px;
@@ -170,10 +181,14 @@
     line-height: 1.35;
   }
 
-  .share-shell .compact .file-row .icon-button {
+  .share-shell .compact .file-row .share-file-actions {
     grid-column: 2;
     grid-row: 1 / 4;
     align-self: center;
+    justify-self: end;
+  }
+
+  .share-shell .compact .file-row .share-file-actions .icon-button {
     width: 42px;
     height: 42px;
   }

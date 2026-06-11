@@ -1,12 +1,14 @@
 <script setup>
-import { Download } from '@lucide/vue'
+import { Download, Eye } from '@lucide/vue'
 import { useCloudStorageContext } from '../composables/appContext'
+import AppDialogs from './AppDialogs.vue'
 
 const {
   downloadShareFile,
   formatSize,
   iconFor,
   loadShare,
+  openSharePreview,
   shareState,
 } = useCloudStorageContext()
 </script>
@@ -47,22 +49,34 @@ const {
         v-for="file in shareState.files"
         :key="file.id"
         class="file-row"
-        @dblclick="file.fileKind === 'FOLDER' ? loadShare(file.id) : downloadShareFile(file)"
+        @dblclick="file.fileKind === 'FOLDER' ? loadShare(file.id) : openSharePreview(file)"
       >
         <component :is="iconFor(file)" class="file-icon" />
         <span class="file-name">{{ file.name }}</span>
         <span>{{ file.fileKind === 'FOLDER' ? '文件夹' : formatSize(file.sizeBytes) }}</span>
         <span>{{ file.downloadCount }} 次</span>
-        <button
-          class="icon-button"
-          :title="file.fileKind === 'FOLDER' ? '下载文件夹' : '下载'"
-          @click.stop="downloadShareFile(file)"
-          @dblclick.stop
-        >
-          <Download :size="17" />
-        </button>
+        <div class="share-file-actions">
+          <button
+            v-if="file.fileKind === 'FILE'"
+            class="icon-button"
+            title="预览"
+            @click.stop="openSharePreview(file)"
+            @dblclick.stop
+          >
+            <Eye :size="17" />
+          </button>
+          <button
+            class="icon-button"
+            :title="file.fileKind === 'FOLDER' ? '下载文件夹' : '下载'"
+            @click.stop="downloadShareFile(file)"
+            @dblclick.stop
+          >
+            <Download :size="17" />
+          </button>
+        </div>
       </div>
     </div>
   </section>
+  <AppDialogs />
 </main>
 </template>

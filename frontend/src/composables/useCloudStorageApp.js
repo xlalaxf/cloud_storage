@@ -1080,16 +1080,22 @@ export function useCloudStorageApp() {
     try {
       closePreview()
       const response = await blobRequest(`/files/${file.id}/preview`)
-      const blob = await response.blob()
-      preview.open = true
-      preview.name = file.name
-      preview.type = file.contentType || blob.type
-      preview.url = URL.createObjectURL(blob)
-      if (preview.type.startsWith('text/') || ['json', 'md', 'log', 'csv'].includes(file.extension)) {
-        preview.text = await blob.text()
-      }
+      await showPreviewBlob(file, await response.blob())
     } catch (error) {
       fail(error)
+    }
+  }
+
+  async function showPreviewBlob(file, blob) {
+    const extension = (file.extension || '').toLowerCase()
+    preview.open = true
+    preview.name = file.name
+    preview.type = file.contentType || blob.type || ''
+    preview.url = URL.createObjectURL(blob)
+    if (preview.type.startsWith('text/') || ['json', 'md', 'log', 'csv'].includes(extension)) {
+      preview.text = await blob.text()
+    } else {
+      preview.text = ''
     }
   }
 
@@ -1742,6 +1748,7 @@ export function useCloudStorageApp() {
       DIRECT_LINK_DOWNLOAD: '直链下载',
       CREATE_SHARE: '创建分享',
       SHARE_DOWNLOAD: '分享下载',
+      SHARE_PREVIEW: '分享预览',
     }
     return labels[operation] || operation
   }
@@ -1787,6 +1794,20 @@ export function useCloudStorageApp() {
       link.remove()
       URL.revokeObjectURL(url)
       await loadShare(shareState.parentId)
+    } catch (error) {
+      fail(error)
+    }
+  }
+
+  async function openSharePreview(file) {
+    if (!file || file.fileKind !== 'FILE') return
+    const params = new URLSearchParams()
+    if (shareState.code) params.set('code', shareState.code)
+    const suffix = params.toString() ? `?${params}` : ''
+    try {
+      closePreview()
+      const response = await blobRequest(`/public/shares/${shareState.token}/files/${file.id}/preview${suffix}`)
+      await showPreviewBlob(file, await response.blob())
     } catch (error) {
       fail(error)
     }
@@ -1990,6 +2011,7 @@ export function useCloudStorageApp() {
     operationLabel,
     loadShare,
     downloadShareFile,
+    openSharePreview,
     switchTab,
   }
 }

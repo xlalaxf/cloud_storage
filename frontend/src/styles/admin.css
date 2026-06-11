@@ -272,7 +272,7 @@
 }
 
 .share-shell .compact .file-row {
-  grid-template-columns: 24px minmax(180px, 1fr) 120px 90px 48px;
+  grid-template-columns: 24px minmax(180px, 1fr) 120px 90px auto;
 }
 
 .admin-files-page .admin-file-list {

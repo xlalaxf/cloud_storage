@@ -53,8 +53,20 @@ public class PublicController {
         return binary(linkService.downloadShare(token, code, fileId));
     }
 
+    @GetMapping("/shares/{token}/files/{fileId}/preview")
+    public ResponseEntity<?> sharePreview(
+            @PathVariable String token,
+            @PathVariable Long fileId,
+            @RequestParam(required = false) String code) {
+        return binary(linkService.previewShare(token, code, fileId), false);
+    }
+
     private ResponseEntity<?> binary(FileService.DownloadPayload payload) {
-        ContentDisposition disposition = ContentDisposition.attachment()
+        return binary(payload, true);
+    }
+
+    private ResponseEntity<?> binary(FileService.DownloadPayload payload, boolean attachment) {
+        ContentDisposition disposition = (attachment ? ContentDisposition.attachment() : ContentDisposition.inline())
                 .filename(payload.filename(), StandardCharsets.UTF_8)
                 .build();
         return ResponseEntity.ok()

@@ -180,6 +180,25 @@ public class LinkService {
         return payload;
     }
 
+    @Transactional
+    public FileService.DownloadPayload previewShare(String token, String code, Long fileId) {
+        ShareLink link = shareLinkRepository.findByToken(token).orElseThrow(() -> AppException.notFound("分享不存在"));
+        ensureLinkUsable(link.isEnabled(), link.getExpiresAt());
+        if (!isUnlocked(link, code)) {
+            throw AppException.forbidden("提取码错误");
+        }
+        CloudFile target = fileService.requireExisting(fileId);
+        if (!fileService.isSameOrDescendant(target, link.getRootFile())) {
+            throw AppException.forbidden("不能访问该项目");
+        }
+        if (target.getFileKind() != FileKind.FILE) {
+            throw AppException.badRequest("文件夹不支持在线预览");
+        }
+        FileService.DownloadPayload payload = fileService.download(target, false);
+        auditService.recordFileOperation(link.getOwner(), target, "SHARE_PREVIEW", "分享: " + link.getToken());
+        return payload;
+    }
+
     private DirectLinkResponse toResponse(DirectLink link, String requestOrigin) {
         String url = originOrDefault(requestOrigin) + "/api/public/direct/" + link.getToken();
         return new DirectLinkResponse(

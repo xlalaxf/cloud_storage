@@ -20,7 +20,7 @@ export async function request(path, options = {}) {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const timeout = timeoutMs > 0 ? window.setTimeout(() => controller.abort(), timeoutMs) : null
   const token = getToken()
-  if (token) {
+  if (token && shouldSendToken(path)) {
     headers.set('Authorization', `Bearer ${token}`)
   }
 
@@ -175,7 +175,7 @@ export function uploadChunkRequest(path, blob, options = {}) {
 export async function blobRequest(path) {
   const headers = new Headers()
   const token = getToken()
-  if (token) {
+  if (token && shouldSendToken(path)) {
     headers.set('Authorization', `Bearer ${token}`)
   }
   const response = await fetch(`${API_BASE}${path}`, { headers })
@@ -208,4 +208,8 @@ function apiError(message, status) {
   const error = new Error(message)
   error.status = status
   return error
+}
+
+function shouldSendToken(path) {
+  return !path.startsWith('/auth/') && !path.startsWith('/public/')
 }
