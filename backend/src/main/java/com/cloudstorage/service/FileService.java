@@ -17,10 +17,12 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.URLConnection;
+import java.sql.Timestamp;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -48,9 +50,12 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipException;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
@@ -59,9 +64,11 @@ import org.springframework.web.multipart.MultipartFile;
 
 @Service
 public class FileService {
+    private static final Logger log = LoggerFactory.getLogger(FileService.class);
     private static final int ZIP_ENTRY_LIMIT = 10000;
     private static final long ZIP_EXTRACTED_SIZE_LIMIT = 3L * 1024 * 1024 * 1024;
     private static final int ZIP_EXTRACT_WORKERS = Math.max(2, Math.min(8, Runtime.getRuntime().availableProcessors()));
+    private static final int DB_LOOKUP_BATCH_SIZE = 500;
 
     private final CloudFileRepository fileRepository;
     private final StorageObjectRepository objectRepository;
@@ -69,6 +76,7 @@ public class FileService {
     private final FileStorageService storageService;
     private final FileMapper fileMapper;
     private final AuditService auditService;
+    private final JdbcTemplate jdbcTemplate;
     private final TransactionTemplate transactionTemplate;
 
     public FileService(
@@ -78,6 +86,7 @@ public class FileService {
             FileStorageService storageService,
             FileMapper fileMapper,
             AuditService auditService,
+            JdbcTemplate jdbcTemplate,
             PlatformTransactionManager transactionManager) {
         this.fileRepository = fileRepository;
         this.objectRepository = objectRepository;
@@ -85,6 +94,7 @@ public class FileService {
         this.storageService = storageService;
         this.fileMapper = fileMapper;
         this.auditService = auditService;
+        this.jdbcTemplate = jdbcTemplate;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
@@ -320,26 +330,61 @@ public class FileService {
     }
 
     private List<FileResponse> extractZip(Long userId, Long fileId, ExtractJobService.ExtractJob job) {
+        long totalStartedNanos = System.nanoTime();
         ExtractArchive archive = loadExtractArchive(userId, fileId);
         if (job != null) {
             job.scanning(archive.name());
         }
+        long scanStartedNanos = System.nanoTime();
         List<ZipEntryPlan> entries = readZipEntries(archive.archivePath());
         ZipStats stats = scanZipEntries(entries);
+        log.info(
+                "Extract scan done fileId={} fileName={} entries={} files={} totalBytes={} elapsedMs={}",
+                fileId,
+                archive.name(),
+                stats.totalEntries(),
+                stats.totalFiles(),
+                stats.totalBytes(),
+                elapsedMs(scanStartedNanos));
         List<FileStorageService.StoredObject> storedObjects = new ArrayList<>();
         ExtractPlan plan = null;
         try {
             if (job != null) {
                 job.extracting(stats.totalEntries(), stats.totalBytes());
             }
+            long planStartedNanos = System.nanoTime();
             plan = transactionTemplate.execute(status -> createExtractPlan(userId, archive, entries, job));
             if (plan == null) {
                 throw AppException.badRequest("解压失败，请稍后重试");
             }
+            log.info(
+                    "Extract plan done fileId={} rootId={} plannedFiles={} elapsedMs={}",
+                    fileId,
+                    plan.rootId(),
+                    plan.files().size(),
+                    elapsedMs(planStartedNanos));
+            long extractStartedNanos = System.nanoTime();
             List<ExtractedObject> extractedObjects = extractPlannedFiles(
                     archive.archivePath(), userId, plan.files(), stats, job, storedObjects);
+            log.info(
+                    "Extract streams done fileId={} extractedFiles={} storedObjects={} elapsedMs={}",
+                    fileId,
+                    extractedObjects.size(),
+                    storedObjects.size(),
+                    elapsedMs(extractStartedNanos));
+            if (job != null) {
+                job.saving();
+            }
+            long persistStartedNanos = System.nanoTime();
             ExtractPlan completedPlan = plan;
-            return transactionTemplate.execute(status -> persistExtractedFiles(userId, archive, completedPlan, extractedObjects));
+            List<FileResponse> result = transactionTemplate.execute(status ->
+                    persistExtractedFiles(userId, archive, completedPlan, extractedObjects));
+            log.info(
+                    "Extract persist done fileId={} elapsedMs={} totalElapsedMs={}",
+                    fileId,
+                    elapsedMs(persistStartedNanos),
+                    elapsedMs(totalStartedNanos));
+            return result;
         } catch (Exception ex) {
             if (ex instanceof AppException appException) {
                 cleanupCreatedObjects(storedObjects);
@@ -481,17 +526,21 @@ public class FileService {
     private StorageObject resolveObject(FileStorageService.StoredObject stored) {
         StorageObject object = objectRepository.findFirstBySha256AndSizeBytes(stored.sha256(), stored.size())
                 .orElseGet(() -> {
-                    StorageObject created = new StorageObject();
-                    created.setSha256(stored.sha256());
-                    created.setSizeBytes(stored.size());
-                    created.setStoredName(stored.storedName());
-                    created.setRelativePath(stored.relativePath());
-                    created.setContentType(stored.contentType());
-                    created.setExtension(stored.extension());
-                    return created;
+                    return newStorageObject(stored);
                 });
         retainObject(object);
         return objectRepository.save(object);
+    }
+
+    private StorageObject newStorageObject(FileStorageService.StoredObject stored) {
+        StorageObject created = new StorageObject();
+        created.setSha256(stored.sha256());
+        created.setSizeBytes(stored.size());
+        created.setStoredName(stored.storedName());
+        created.setRelativePath(stored.relativePath());
+        created.setContentType(stored.contentType());
+        created.setExtension(stored.extension());
+        return created;
     }
 
     private StorageObject requireObject(CloudFile file) {
@@ -681,7 +730,6 @@ public class FileService {
         List<Future<List<ExtractedObject>>> futures = new ArrayList<>();
         try {
             if (job != null) {
-                job.extracting(stats.totalEntries(), stats.totalBytes());
                 progressThread = startExtractProgressReporter(
                         job,
                         stats.totalEntries(),
@@ -814,20 +862,203 @@ public class FileService {
         User user = userRepository.findById(userId).orElseThrow(() -> AppException.notFound("用户不存在"));
         CloudFile extractRoot = fileRepository.findByIdAndOwnerIdAndDeletedFalse(plan.rootId(), userId)
                 .orElseThrow(() -> AppException.notFound("解压目录不存在"));
-        Map<Long, CloudFile> parentCache = new HashMap<>();
-        parentCache.put(extractRoot.getId(), extractRoot);
-        List<FileResponse> extracted = new ArrayList<>();
+        long parentStartedNanos = System.nanoTime();
+        Map<Long, CloudFile> parentCache = loadExtractParents(userId, extractRoot, extractedObjects);
+        log.info(
+                "Extract parents loaded rootId={} parents={} elapsedMs={}",
+                plan.rootId(),
+                parentCache.size(),
+                elapsedMs(parentStartedNanos));
+
+        long objectStartedNanos = System.nanoTime();
+        Map<StoredObjectKey, StorageObject> objectByKey = resolveExtractedObjects(extractedObjects);
+        log.info(
+                "Extract objects resolved rootId={} uniqueObjects={} elapsedMs={}",
+                plan.rootId(),
+                objectByKey.size(),
+                elapsedMs(objectStartedNanos));
+
+        long fileStartedNanos = System.nanoTime();
+        List<ExtractedFileInsert> filesToInsert = new ArrayList<>(extractedObjects.size());
         for (ExtractedObject extractedObject : extractedObjects) {
-            StorageObject object = resolveObject(extractedObject.storedObject());
-            CloudFile parent = parentCache.computeIfAbsent(extractedObject.parentId(), parentId ->
-                    fileRepository.findByIdAndOwnerIdAndDeletedFalse(parentId, userId)
-                            .orElseThrow(() -> AppException.notFound("解压目录不存在")));
-            CloudFile extractedFile = buildFile(attachedUser(user), parent, extractedObject.name(), object);
-            extracted.add(fileMapper.toResponse(fileRepository.save(extractedFile)));
+            StorageObject object = objectByKey.get(storedObjectKey(extractedObject.storedObject()));
+            CloudFile parent = parentCache.get(extractedObject.parentId());
+            if (object == null || parent == null) {
+                throw AppException.notFound("解压目录不存在");
+            }
+            filesToInsert.add(new ExtractedFileInsert(extractedObject.name(), parent.getId(), object));
         }
-        extracted.add(0, fileMapper.toResponse(extractRoot));
+        batchInsertExtractedFiles(user.getId(), filesToInsert);
+        log.info(
+                "Extract files saved rootId={} files={} elapsedMs={}",
+                plan.rootId(),
+                filesToInsert.size(),
+                elapsedMs(fileStartedNanos));
+
+        List<FileResponse> extracted = new ArrayList<>(1);
+        extracted.add(fileMapper.toResponse(extractRoot));
         auditService.recordFileOperation(user, extractRoot, "EXTRACT", "来源压缩包: " + archive.name());
         return extracted;
+    }
+
+    private void batchInsertExtractedFiles(Long ownerId, List<ExtractedFileInsert> files) {
+        if (files.isEmpty()) {
+            return;
+        }
+        for (List<ExtractedFileInsert> batch : batches(files, DB_LOOKUP_BATCH_SIZE)) {
+            jdbcTemplate.batchUpdate(
+                    """
+                            insert into files
+                            (owner_id, parent_id, object_id, file_kind, name, stored_name, relative_path, content_type,
+                             extension, size_bytes, download_count, deleted, created_at, updated_at)
+                            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                    batch,
+                    batch.size(),
+                    (statement, file) -> {
+                        StorageObject object = file.object();
+                        Timestamp now = Timestamp.from(Instant.now());
+                        statement.setLong(1, ownerId);
+                        statement.setLong(2, file.parentId());
+                        statement.setLong(3, object.getId());
+                        statement.setString(4, FileKind.FILE.name());
+                        statement.setString(5, file.name());
+                        statement.setString(6, object.getStoredName());
+                        statement.setString(7, object.getRelativePath());
+                        statement.setString(8, object.getContentType());
+                        statement.setString(9, object.getExtension());
+                        statement.setLong(10, object.getSizeBytes());
+                        statement.setLong(11, 0);
+                        statement.setBoolean(12, false);
+                        statement.setTimestamp(13, now);
+                        statement.setTimestamp(14, now);
+                    });
+        }
+    }
+
+    private Map<Long, CloudFile> loadExtractParents(
+            Long userId,
+            CloudFile extractRoot,
+            List<ExtractedObject> extractedObjects) {
+        Map<Long, CloudFile> parentCache = new HashMap<>();
+        parentCache.put(extractRoot.getId(), extractRoot);
+        Set<Long> parentIds = new HashSet<>();
+        for (ExtractedObject extractedObject : extractedObjects) {
+            if (extractedObject.parentId() != null) {
+                parentIds.add(extractedObject.parentId());
+            }
+        }
+        parentIds.remove(extractRoot.getId());
+        for (List<Long> batch : batches(parentIds, DB_LOOKUP_BATCH_SIZE)) {
+            fileRepository.findByIdInAndOwnerIdAndDeletedFalse(batch, userId)
+                    .forEach(parent -> parentCache.put(parent.getId(), parent));
+        }
+        for (Long parentId : parentIds) {
+            if (!parentCache.containsKey(parentId)) {
+                throw AppException.notFound("解压目录不存在");
+            }
+        }
+        return parentCache;
+    }
+
+    private Map<StoredObjectKey, StorageObject> resolveExtractedObjects(List<ExtractedObject> extractedObjects) {
+        Map<StoredObjectKey, FileStorageService.StoredObject> storedByKey = new HashMap<>();
+        Map<StoredObjectKey, Integer> refCountsByKey = new HashMap<>();
+        Set<String> sha256s = new HashSet<>();
+        for (ExtractedObject extractedObject : extractedObjects) {
+            FileStorageService.StoredObject stored = extractedObject.storedObject();
+            StoredObjectKey key = storedObjectKey(stored);
+            storedByKey.putIfAbsent(key, stored);
+            refCountsByKey.merge(key, 1, Integer::sum);
+            sha256s.add(stored.sha256());
+        }
+
+        Map<StoredObjectKey, StorageObject> objectByKey = new HashMap<>();
+        for (List<String> batch : batches(sha256s, DB_LOOKUP_BATCH_SIZE)) {
+            for (StorageObject object : objectRepository.findBySha256In(batch)) {
+                StoredObjectKey key = storedObjectKey(object);
+                if (storedByKey.containsKey(key)) {
+                    objectByKey.putIfAbsent(key, object);
+                }
+            }
+        }
+
+        List<StorageObject> existingObjects = new ArrayList<>(objectByKey.values());
+        batchRetainStorageObjects(existingObjects, refCountsByKey);
+
+        List<FileStorageService.StoredObject> missingObjects = new ArrayList<>();
+        for (Map.Entry<StoredObjectKey, FileStorageService.StoredObject> entry : storedByKey.entrySet()) {
+            StoredObjectKey key = entry.getKey();
+            if (!objectByKey.containsKey(key)) {
+                missingObjects.add(entry.getValue());
+            }
+        }
+        batchInsertStorageObjects(missingObjects, refCountsByKey);
+
+        if (!missingObjects.isEmpty()) {
+            objectByKey.clear();
+            for (List<String> batch : batches(sha256s, DB_LOOKUP_BATCH_SIZE)) {
+                for (StorageObject object : objectRepository.findBySha256In(batch)) {
+                    StoredObjectKey key = storedObjectKey(object);
+                    if (storedByKey.containsKey(key)) {
+                        objectByKey.putIfAbsent(key, object);
+                    }
+                }
+            }
+        }
+        if (objectByKey.size() != storedByKey.size()) {
+            throw AppException.badRequest("解压文件记录保存失败");
+        }
+        return objectByKey;
+    }
+
+    private void batchRetainStorageObjects(
+            List<StorageObject> objects,
+            Map<StoredObjectKey, Integer> refCountsByKey) {
+        if (objects.isEmpty()) {
+            return;
+        }
+        for (List<StorageObject> batch : batches(objects, DB_LOOKUP_BATCH_SIZE)) {
+            jdbcTemplate.batchUpdate(
+                    "update storage_objects set ref_count = ref_count + ?, updated_at = ? where id = ?",
+                    batch,
+                    batch.size(),
+                    (statement, object) -> {
+                        statement.setLong(1, refCountsByKey.getOrDefault(storedObjectKey(object), 0));
+                        statement.setTimestamp(2, Timestamp.from(Instant.now()));
+                        statement.setLong(3, object.getId());
+                    });
+        }
+    }
+
+    private void batchInsertStorageObjects(
+            List<FileStorageService.StoredObject> objects,
+            Map<StoredObjectKey, Integer> refCountsByKey) {
+        if (objects.isEmpty()) {
+            return;
+        }
+        for (List<FileStorageService.StoredObject> batch : batches(objects, DB_LOOKUP_BATCH_SIZE)) {
+            jdbcTemplate.batchUpdate(
+                    """
+                            insert into storage_objects
+                            (sha256, size_bytes, stored_name, relative_path, content_type, extension, ref_count, created_at, updated_at)
+                            values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                    batch,
+                    batch.size(),
+                    (statement, stored) -> {
+                        Timestamp now = Timestamp.from(Instant.now());
+                        statement.setString(1, stored.sha256());
+                        statement.setLong(2, stored.size());
+                        statement.setString(3, stored.storedName());
+                        statement.setString(4, stored.relativePath());
+                        statement.setString(5, stored.contentType());
+                        statement.setString(6, stored.extension());
+                        statement.setLong(7, refCountsByKey.getOrDefault(storedObjectKey(stored), 0));
+                        statement.setTimestamp(8, now);
+                        statement.setTimestamp(9, now);
+                    });
+        }
     }
 
     private void cleanupCreatedObjects(List<FileStorageService.StoredObject> storedObjects) {
@@ -888,16 +1119,20 @@ public class FileService {
             throw AppException.badRequest("压缩包文件数量超过限制");
         }
         long totalBytes = 0;
+        int totalFiles = 0;
         for (ZipEntryPlan entry : entries) {
             long size = entry.size();
-            if (!entry.directory() && size > 0) {
-                totalBytes += size;
-                if (totalBytes > ZIP_EXTRACTED_SIZE_LIMIT) {
-                    throw AppException.badRequest("压缩包解压后体积超过限制");
+            if (!entry.directory()) {
+                totalFiles++;
+                if (size > 0) {
+                    totalBytes += size;
+                    if (totalBytes > ZIP_EXTRACTED_SIZE_LIMIT) {
+                        throw AppException.badRequest("压缩包解压后体积超过限制");
+                    }
                 }
             }
         }
-        return new ZipStats(entries.size(), totalBytes);
+        return new ZipStats(entries.size(), totalFiles, totalBytes);
     }
 
     private final class ExtractContext {
@@ -1057,6 +1292,22 @@ public class FileService {
         return userRepository.getReferenceById(user.getId());
     }
 
+    private <T> List<List<T>> batches(Collection<T> values, int batchSize) {
+        if (values.isEmpty()) {
+            return List.of();
+        }
+        List<T> items = new ArrayList<>(values);
+        List<List<T>> batches = new ArrayList<>((items.size() + batchSize - 1) / batchSize);
+        for (int start = 0; start < items.size(); start += batchSize) {
+            batches.add(items.subList(start, Math.min(start + batchSize, items.size())));
+        }
+        return batches;
+    }
+
+    private long elapsedMs(long startedNanos) {
+        return Duration.ofNanos(System.nanoTime() - startedNanos).toMillis();
+    }
+
     public record DownloadPayload(Resource resource, String filename, MediaType mediaType, long sizeBytes) {
     }
 
@@ -1094,6 +1345,20 @@ public class FileService {
             FileStorageService.StoredObject storedObject) {
     }
 
-    private record ZipStats(int totalEntries, long totalBytes) {
+    private record ExtractedFileInsert(String name, Long parentId, StorageObject object) {
+    }
+
+    private StoredObjectKey storedObjectKey(FileStorageService.StoredObject storedObject) {
+        return new StoredObjectKey(storedObject.sha256(), storedObject.size());
+    }
+
+    private StoredObjectKey storedObjectKey(StorageObject object) {
+        return new StoredObjectKey(object.getSha256(), object.getSizeBytes());
+    }
+
+    private record StoredObjectKey(String sha256, long sizeBytes) {
+    }
+
+    private record ZipStats(int totalEntries, int totalFiles, long totalBytes) {
     }
 }

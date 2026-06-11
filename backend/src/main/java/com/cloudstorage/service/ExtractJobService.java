@@ -5,28 +5,38 @@ import com.cloudstorage.dto.FileDtos.FileResponse;
 import com.cloudstorage.model.User;
 import jakarta.annotation.PreDestroy;
 import java.time.Instant;
+import java.time.Duration;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 @Service
 public class ExtractJobService {
+    private static final Logger log = LoggerFactory.getLogger(ExtractJobService.class);
     private static final int MAX_CONCURRENT_JOBS = Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors() / 2));
 
     private final FileService fileService;
-    private final ExecutorService executor = Executors.newFixedThreadPool(
+    private final ThreadPoolExecutor executor = new ThreadPoolExecutor(
             MAX_CONCURRENT_JOBS,
+            MAX_CONCURRENT_JOBS,
+            0L,
+            TimeUnit.MILLISECONDS,
+            new LinkedBlockingQueue<>(),
             namedThreadFactory("extract-job-"));
     private final Map<String, ExtractJob> jobs = new ConcurrentHashMap<>();
     private final Map<String, String> activeByUserFile = new ConcurrentHashMap<>();
 
     public ExtractJobService(FileService fileService) {
         this.fileService = fileService;
+        executor.prestartAllCoreThreads();
     }
 
     @PreDestroy
@@ -48,6 +58,14 @@ public class ExtractJobService {
         jobs.put(job.id, job);
         activeByUserFile.put(activeKey, job.id);
         executor.submit(() -> runJob(job, activeKey));
+        log.info(
+                "Queued extract job id={} userId={} fileId={} fileName={} activeJobs={} queuedJobs={}",
+                job.id,
+                user.getId(),
+                fileId,
+                fileName,
+                executor.getActiveCount(),
+                executor.getQueue().size());
         return toResponse(job);
     }
 
@@ -60,10 +78,25 @@ public class ExtractJobService {
     }
 
     private void runJob(ExtractJob job, String activeKey) {
+        long startedNanos = System.nanoTime();
+        log.info("Starting extract job id={} userId={} fileId={}", job.id, job.userId, job.fileId);
         try {
+            job.scanning(job.fileName);
             fileService.extractZipJob(job);
+            log.info(
+                    "Completed extract job id={} fileId={} elapsedMs={}",
+                    job.id,
+                    job.fileId,
+                    Duration.ofNanos(System.nanoTime() - startedNanos).toMillis());
         } catch (Exception ex) {
             job.fail(ex.getMessage() == null || ex.getMessage().isBlank() ? "解压失败" : ex.getMessage());
+            log.warn(
+                    "Failed extract job id={} fileId={} elapsedMs={} message={}",
+                    job.id,
+                    job.fileId,
+                    Duration.ofNanos(System.nanoTime() - startedNanos).toMillis(),
+                    job.message,
+                    ex);
         } finally {
             activeByUserFile.remove(activeKey, job.id);
         }
@@ -77,7 +110,6 @@ public class ExtractJobService {
         AtomicInteger sequence = new AtomicInteger(1);
         return runnable -> {
             Thread thread = new Thread(runnable, prefix + sequence.getAndIncrement());
-            thread.setDaemon(true);
             return thread;
         };
     }
@@ -158,6 +190,14 @@ public class ExtractJobService {
             this.processedEntries = processedEntries;
             this.processedBytes = processedBytes;
             this.currentEntryName = currentEntryName == null ? "" : currentEntryName;
+        }
+
+        public void saving() {
+            this.status = ExtractStatus.RUNNING;
+            this.processedEntries = Math.max(this.processedEntries, this.totalEntries);
+            this.processedBytes = Math.max(this.processedBytes, this.totalBytes);
+            this.currentEntryName = "";
+            this.message = "正在保存文件记录";
         }
 
         public void complete(FileResponse root) {

@@ -2,6 +2,7 @@ package com.cloudstorage.repository;
 
 import com.cloudstorage.model.CloudFile;
 import com.cloudstorage.model.FileKind;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -18,6 +19,8 @@ public interface CloudFileRepository extends JpaRepository<CloudFile, Long> {
     List<CloudFile> findByOwnerIdAndDeletedFalseOrderByParentIdAscFileKindDescNameAsc(Long ownerId);
 
     Optional<CloudFile> findByIdAndOwnerIdAndDeletedFalse(Long id, Long ownerId);
+
+    List<CloudFile> findByIdInAndOwnerIdAndDeletedFalse(Collection<Long> ids, Long ownerId);
 
     Optional<CloudFile> findFirstByOwnerIdAndParentIdAndNameAndFileKindAndDeletedFalse(
             Long ownerId, Long parentId, String name, FileKind fileKind);
