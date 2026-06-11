@@ -14,7 +14,9 @@ import com.cloudstorage.dto.FileDtos.ShareLinkResponse;
 import com.cloudstorage.model.User;
 import com.cloudstorage.service.FileService;
 import com.cloudstorage.service.LinkService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
@@ -138,13 +140,20 @@ public class FileController {
     public ApiResponse<DirectLinkResponse> createDirectLink(
             @AuthenticationPrincipal User user,
             @PathVariable Long id,
-            @RequestBody(required = false) CreateDirectLinkRequest request) {
-        return ApiResponse.ok("直链已创建", linkService.createDirectLink(user, id, request == null ? null : request.expiresAt()));
+            @RequestBody(required = false) CreateDirectLinkRequest request,
+            HttpServletRequest servletRequest) {
+        return ApiResponse.ok("直链已创建", linkService.createDirectLink(
+                user,
+                id,
+                request == null ? null : request.expiresAt(),
+                linkOrigin(servletRequest)));
     }
 
     @GetMapping("/direct-links")
-    public ApiResponse<List<DirectLinkResponse>> directLinks(@AuthenticationPrincipal User user) {
-        return ApiResponse.ok(linkService.listDirectLinks(user));
+    public ApiResponse<List<DirectLinkResponse>> directLinks(
+            @AuthenticationPrincipal User user,
+            HttpServletRequest servletRequest) {
+        return ApiResponse.ok(linkService.listDirectLinks(user, linkOrigin(servletRequest)));
     }
 
     @DeleteMapping("/direct-links/{linkId}")
@@ -157,17 +166,21 @@ public class FileController {
     public ApiResponse<ShareLinkResponse> createShare(
             @AuthenticationPrincipal User user,
             @PathVariable Long id,
-            @RequestBody(required = false) CreateShareRequest request) {
+            @RequestBody(required = false) CreateShareRequest request,
+            HttpServletRequest servletRequest) {
         return ApiResponse.ok("分享已创建", linkService.createShare(
                 user,
                 id,
                 request == null ? null : request.extractionCode(),
-                request == null ? null : request.expiresAt()));
+                request == null ? null : request.expiresAt(),
+                linkOrigin(servletRequest)));
     }
 
     @GetMapping("/shares")
-    public ApiResponse<List<ShareLinkResponse>> shares(@AuthenticationPrincipal User user) {
-        return ApiResponse.ok(linkService.listShares(user));
+    public ApiResponse<List<ShareLinkResponse>> shares(
+            @AuthenticationPrincipal User user,
+            HttpServletRequest servletRequest) {
+        return ApiResponse.ok(linkService.listShares(user, linkOrigin(servletRequest)));
     }
 
     @DeleteMapping("/shares/{shareId}")
@@ -185,5 +198,31 @@ public class FileController {
                 .contentLength(payload.sizeBytes())
                 .header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString())
                 .body(payload.resource());
+    }
+
+    private String linkOrigin(HttpServletRequest request) {
+        String origin = normalizeOrigin(request.getHeader(HttpHeaders.ORIGIN));
+        if (origin != null) {
+            return origin;
+        }
+        return normalizeOrigin(request.getHeader(HttpHeaders.REFERER));
+    }
+
+    private String normalizeOrigin(String value) {
+        if (value == null || value.isBlank() || "null".equalsIgnoreCase(value.trim())) {
+            return null;
+        }
+        try {
+            URI uri = URI.create(value.trim());
+            String scheme = uri.getScheme();
+            String authority = uri.getRawAuthority();
+            if (scheme == null || authority == null
+                    || (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme))) {
+                return null;
+            }
+            return scheme.toLowerCase() + "://" + authority;
+        } catch (IllegalArgumentException ex) {
+            return null;
+        }
     }
 }

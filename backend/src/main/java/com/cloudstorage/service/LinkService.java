@@ -19,7 +19,6 @@ import java.util.List;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
 @Service
 public class LinkService {
@@ -50,7 +49,7 @@ public class LinkService {
     }
 
     @Transactional
-    public DirectLinkResponse createDirectLink(User user, Long fileId, Instant expiresAt) {
+    public DirectLinkResponse createDirectLink(User user, Long fileId, Instant expiresAt, String requestOrigin) {
         CloudFile file = fileService.requireOwned(user, fileId);
         if (file.getFileKind() != FileKind.FILE) {
             throw AppException.badRequest("直链只能用于文件");
@@ -62,13 +61,13 @@ public class LinkService {
         link.setExpiresAt(expiresAt);
         DirectLink saved = directLinkRepository.save(link);
         auditService.recordFileOperation(user, file, "CREATE_DIRECT_LINK", expiresAt == null ? "永久有效" : "到期: " + expiresAt);
-        return toResponse(saved);
+        return toResponse(saved, requestOrigin);
     }
 
     @Transactional(readOnly = true)
-    public List<DirectLinkResponse> listDirectLinks(User user) {
+    public List<DirectLinkResponse> listDirectLinks(User user, String requestOrigin) {
         return directLinkRepository.findByOwnerIdOrderByCreatedAtDesc(user.getId()).stream()
-                .map(this::toResponse)
+                .map(link -> toResponse(link, requestOrigin))
                 .toList();
     }
 
@@ -94,7 +93,12 @@ public class LinkService {
     }
 
     @Transactional
-    public ShareLinkResponse createShare(User user, Long fileId, String extractionCode, Instant expiresAt) {
+    public ShareLinkResponse createShare(
+            User user,
+            Long fileId,
+            String extractionCode,
+            Instant expiresAt,
+            String requestOrigin) {
         CloudFile file = fileService.requireOwned(user, fileId);
         ShareLink link = new ShareLink();
         link.setOwner(userRepository.getReferenceById(user.getId()));
@@ -104,13 +108,13 @@ public class LinkService {
         link.setExpiresAt(expiresAt);
         ShareLink saved = shareLinkRepository.save(link);
         auditService.recordFileOperation(user, file, "CREATE_SHARE", expiresAt == null ? "永久有效" : "到期: " + expiresAt);
-        return toResponse(saved);
+        return toResponse(saved, requestOrigin);
     }
 
     @Transactional(readOnly = true)
-    public List<ShareLinkResponse> listShares(User user) {
+    public List<ShareLinkResponse> listShares(User user, String requestOrigin) {
         return shareLinkRepository.findByOwnerIdOrderByCreatedAtDesc(user.getId()).stream()
-                .map(this::toResponse)
+                .map(link -> toResponse(link, requestOrigin))
                 .toList();
     }
 
@@ -176,11 +180,8 @@ public class LinkService {
         return payload;
     }
 
-    private DirectLinkResponse toResponse(DirectLink link) {
-        String url = ServletUriComponentsBuilder.fromCurrentContextPath()
-                .path("/api/public/direct/")
-                .path(link.getToken())
-                .toUriString();
+    private DirectLinkResponse toResponse(DirectLink link, String requestOrigin) {
+        String url = originOrDefault(requestOrigin) + "/api/public/direct/" + link.getToken();
         return new DirectLinkResponse(
                 link.getId(),
                 link.getFile().getId(),
@@ -192,8 +193,8 @@ public class LinkService {
                 link.getCreatedAt());
     }
 
-    private ShareLinkResponse toResponse(ShareLink link) {
-        String url = frontendOrigin + "/share/" + link.getToken();
+    private ShareLinkResponse toResponse(ShareLink link, String requestOrigin) {
+        String url = originOrDefault(requestOrigin) + "/share/" + link.getToken();
         return new ShareLinkResponse(
                 link.getId(),
                 link.getRootFile().getId(),
@@ -241,6 +242,13 @@ public class LinkService {
         byte[] bytes = new byte[24];
         secureRandom.nextBytes(bytes);
         return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+    }
+
+    private String originOrDefault(String requestOrigin) {
+        if (requestOrigin == null || requestOrigin.isBlank()) {
+            return frontendOrigin;
+        }
+        return stripTrailingSlash(requestOrigin);
     }
 
     private String stripTrailingSlash(String value) {
