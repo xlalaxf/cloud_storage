@@ -374,10 +374,10 @@
 }
 
 .maintenance-panel {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px 14px;
   padding: 12px;
   border: 1px solid #d9e1ea;
   border-radius: 8px;
@@ -385,13 +385,6 @@
 }
 
 .maintenance-main {
-  display: grid;
-  gap: 10px;
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.maintenance-main > div:first-child {
   display: grid;
   gap: 4px;
   min-width: 0;
@@ -409,11 +402,12 @@
 }
 
 .maintenance-panel .text-button {
-  flex: 0 0 auto;
+  justify-self: end;
 }
 
 .cleanup-summary {
   display: grid;
+  grid-column: 1 / -1;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
   margin-top: 0;

@@ -373,10 +373,17 @@
     padding: 12px;
   }
 
-  .admin-user-status,
-  .maintenance-panel {
+  .admin-user-status {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .maintenance-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .maintenance-panel .text-button {
+    justify-self: start;
   }
 
   .audit-range {
