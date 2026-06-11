@@ -69,6 +69,7 @@ public class FileService {
     private static final long ZIP_EXTRACTED_SIZE_LIMIT = 3L * 1024 * 1024 * 1024;
     private static final int ZIP_EXTRACT_WORKERS = Math.max(2, Math.min(8, Runtime.getRuntime().availableProcessors()));
     private static final int DB_LOOKUP_BATCH_SIZE = 500;
+    private static final int EXTRACT_PERSIST_ATTEMPTS = 3;
 
     private final CloudFileRepository fileRepository;
     private final StorageObjectRepository objectRepository;
@@ -377,8 +378,7 @@ public class FileService {
             }
             long persistStartedNanos = System.nanoTime();
             ExtractPlan completedPlan = plan;
-            List<FileResponse> result = transactionTemplate.execute(status ->
-                    persistExtractedFiles(userId, archive, completedPlan, extractedObjects));
+            List<FileResponse> result = persistExtractedFilesWithRetry(userId, archive, completedPlan, extractedObjects);
             log.info(
                     "Extract persist done fileId={} elapsedMs={} totalElapsedMs={}",
                     fileId,
@@ -393,7 +393,50 @@ public class FileService {
             }
             cleanupCreatedObjects(storedObjects);
             cleanupExtractRoot(userId, plan);
+            log.warn(
+                    "Extract failed fileId={} fileName={} elapsedMs={}",
+                    fileId,
+                    archive.name(),
+                    elapsedMs(totalStartedNanos),
+                    ex);
             throw AppException.badRequest("解压失败，请确认压缩包未损坏");
+        }
+    }
+
+    private List<FileResponse> persistExtractedFilesWithRetry(
+            Long userId,
+            ExtractArchive archive,
+            ExtractPlan plan,
+            List<ExtractedObject> extractedObjects) {
+        RuntimeException lastFailure = null;
+        for (int attempt = 1; attempt <= EXTRACT_PERSIST_ATTEMPTS; attempt++) {
+            try {
+                return transactionTemplate.execute(status ->
+                        persistExtractedFiles(userId, archive, plan, extractedObjects));
+            } catch (RuntimeException ex) {
+                lastFailure = ex;
+                log.warn(
+                        "Extract persist attempt failed fileId={} rootId={} attempt={}/{} message={}",
+                        archive.fileId(),
+                        plan.rootId(),
+                        attempt,
+                        EXTRACT_PERSIST_ATTEMPTS,
+                        ex.getMessage(),
+                        ex);
+                if (attempt < EXTRACT_PERSIST_ATTEMPTS) {
+                    sleepBeforePersistRetry(attempt);
+                }
+            }
+        }
+        throw AppException.badRequest("解压文件记录保存失败，请稍后重试", lastFailure);
+    }
+
+    private void sleepBeforePersistRetry(int attempt) {
+        try {
+            Thread.sleep(300L * attempt);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw AppException.badRequest("解压任务已中断");
         }
     }
 
