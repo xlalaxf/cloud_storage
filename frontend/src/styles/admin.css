@@ -287,16 +287,22 @@
 }
 
 .settings-page {
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
   gap: 16px;
   max-width: 820px;
 }
 
 .settings-section {
+  align-self: start;
+  flex: 0 0 auto;
+  height: auto;
   min-height: 0;
 }
 
 .settings-form {
+  width: 100%;
   max-width: 680px;
 }
 
@@ -382,6 +388,10 @@
   border: 1px solid #d9e1ea;
   border-radius: 8px;
   background: #f8fafc;
+}
+
+.maintenance-panel + .maintenance-panel {
+  margin-top: 14px;
 }
 
 .maintenance-main {
