@@ -295,6 +295,11 @@ export function useCloudStorageApp() {
     authForm.captchaSvg = data.svg
     authForm.captchaCode = ''
   }
+
+  function captchaCodeFromSvg() {
+    const match = authForm.captchaSvg.match(/<text[^>]*>([^<]+)<\/text>/i)
+    return match?.[1]?.trim() || ''
+  }
   
   async function login() {
     if (busy.value) return
@@ -334,6 +339,11 @@ export function useCloudStorageApp() {
       authMode.value = 'login'
       return
     }
+    if (!authForm.captchaCode || authForm.captchaCode.toLowerCase() !== captchaCodeFromSvg().toLowerCase()) {
+      notify('Verification code is incorrect', 'error')
+      await loadCaptcha()
+      return
+    }
     busy.value = true
     authBusyText.value = '注册中...'
     try {
@@ -344,6 +354,8 @@ export function useCloudStorageApp() {
           password: authForm.password,
           reserveEmail: authForm.reserveEmail,
           nickname: authForm.nickname,
+          captchaId: authForm.captchaId,
+          captchaCode: authForm.captchaCode,
         },
       })
       setToken(data.token)
@@ -355,6 +367,7 @@ export function useCloudStorageApp() {
       void refreshAfterAuth()
     } catch (error) {
       fail(error)
+      await loadCaptcha()
     } finally {
       busy.value = false
       authBusyText.value = ''

@@ -41,6 +41,7 @@ const {
   formatSize,
   formatSpeed,
   goParentFolder,
+  goCrumb,
   iconFor,
   loadFiles,
   openFileInfo,
@@ -81,6 +82,12 @@ const {
     <div class="drop-zone" :class="{ active: dragActive }" @click="fileInput?.click()">
       <Upload :size="20" />
       <span>拖拽文件到这里上传</span>
+    </div>
+
+    <div class="breadcrumbs file-path">
+      <button v-for="(crumb, index) in foldersStack" :key="`${crumb.id ?? 'root'}-${index}`" @click="goCrumb(index)">
+        {{ crumb.name }}
+      </button>
     </div>
 
     <div v-if="uploadProgress.active" class="upload-progress" role="status" aria-live="polite">
@@ -183,7 +190,7 @@ const {
     </div>
   </div>
 
-  <aside class="detail-panel">
+  <aside class="detail-panel" :class="{ 'is-empty': !selected && !selectedFiles.length }">
     <template v-if="selectedFiles.length">
       <Folder class="detail-icon muted" />
       <h2>已选择 {{ selectedFiles.length }} 个项目</h2>

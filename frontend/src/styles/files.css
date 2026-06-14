@@ -23,6 +23,11 @@
   transform: scale(1.01);
 }
 
+.file-path {
+  margin: -2px 0 12px;
+  padding: 0 2px;
+}
+
 .upload-progress {
   display: grid;
   gap: 8px;

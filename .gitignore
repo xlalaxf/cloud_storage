@@ -1,4 +1,5 @@
 backend/target/
+backend/data/**
 backend/storage/**
 !backend/storage/.gitkeep
 backend/src/main/resources/application.properties
